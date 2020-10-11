@@ -255,6 +255,7 @@ static int xdp_umem_pin_pages(struct xdp_umem *umem, unsigned long address)
 		return -ENOMEM;
 
 	mmap_read_lock(current->mm);
+	/*UMEM: Dont follow the rabithole.., just accept what ur given )*/
 	npgs = pin_user_pages(address, umem->npgs,
 			      gup_flags | FOLL_LONGTERM, &umem->pgs[0], NULL);
 	mmap_read_unlock(current->mm);
@@ -387,6 +388,8 @@ out_account:
 	return err;
 }
 
+//UMEM: This is what I need: mem translation/registration.
+// What does DPDK register?
 struct xdp_umem *xdp_umem_create(struct xdp_umem_reg *mr)
 {
 	struct xdp_umem *umem;
