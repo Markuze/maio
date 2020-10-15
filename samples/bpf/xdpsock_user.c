@@ -325,14 +325,23 @@ static void __exit_with_error(int error, const char *file, const char *func,
 						 __LINE__)
 static void swap_mac_addresses(void *data)
 {
-	struct ether_header *eth = (struct ether_header *)data;
-	struct ether_addr *src_addr = (struct ether_addr *)&eth->ether_shost;
-	struct ether_addr *dst_addr = (struct ether_addr *)&eth->ether_dhost;
+	struct ether_header *eth 	= (struct ether_header *)data;
+	struct ether_addr *src_addr 	= (struct ether_addr *)&eth->ether_shost;
+	struct ether_addr *dst_addr 	= (struct ether_addr *)&eth->ether_dhost;
+	struct udphdr *udp_hdr 		= (struct udphdr *)(data +
+						   	sizeof(struct ethhdr) +
+						   	sizeof(struct iphdr));
+	struct iphdr *ip_hdr 		= (struct iphdr *)(data +
+							sizeof(struct ethhdr));
 	struct ether_addr tmp;
 
 	tmp = *src_addr;
 	*src_addr = *dst_addr;
 	*dst_addr = tmp;
+
+	printf("src/dport port: %d/%d\n",
+				htons(udp_hdr->source),
+				htons(udp_hdr->dest));
 }
 
 static void hex_dump(void *pkt, size_t length, u64 addr)

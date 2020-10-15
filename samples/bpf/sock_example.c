@@ -14,6 +14,7 @@
  * - every second user space reads map[tcp], map[udp], map[icmp] to see
  *   how many packets of given protocol were seen on "lo"
  */
+
 #include <stdio.h>
 #include <unistd.h>
 #include <assert.h>
@@ -24,6 +25,7 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <linux/if_ether.h>
+typedef unsigned short __bitwise __sum16;
 #include <linux/ip.h>
 #include <stddef.h>
 #include <bpf/bpf.h>
