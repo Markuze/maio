@@ -31,6 +31,7 @@
 #include <linux/sizes.h>
 #include <linux/sched.h>
 #include <linux/pgtable.h>
+#include <linux/maio.h>
 
 struct mempolicy;
 struct anon_vma;
@@ -926,6 +927,53 @@ static inline void set_compound_order(struct page *page, unsigned int order)
 {
 	page[1].compound_order = order;
 	page[1].compound_nr = 1U << order;
+
+	/* HACK: Dont see a reason to add a new API call - this is always need */
+	page[1].elem_order = 0;
+	page[1].uaddr = 0;
+}
+
+
+static inline void maio_put_page(struct page *page)
+{
+	if (put_page_testzero(page))
+		maio_page_free(page);
+}
+
+static inline void maio_get_page(struct page *page)
+{
+	page_ref_inc(page);
+}
+
+static inline void set_maio_uaddr(struct page *page, u64 uaddr)
+{
+	page[1].uaddr = uaddr;
+}
+
+static inline u64 get_maio_uaddr(struct page *page)
+{
+	page = compound_head(page);
+	return page[1].uaddr;
+}
+
+static inline void set_maio_elem_order(struct page *page, unsigned int order)
+{
+	page[1].elem_order = order;
+}
+
+static inline u16 get_maio_elem_order(struct page *page)
+{
+	page = compound_head(page);
+	return page[1].elem_order;
+}
+
+static inline bool is_maio_page(struct page *page)
+{
+	if (!PageCompound(page))
+		return 0;
+
+	page = compound_head(page);
+	return (get_maio_uaddr(compound_head(page))) ? 1 : 0;
 }
 
 /* Returns the number of pages in this potentially compound page. */
@@ -1147,6 +1195,11 @@ static inline bool is_pci_p2pdma_page(const struct page *page)
 
 static inline void get_page(struct page *page)
 {
+	if (unlikely(is_maio_page(page))) {
+		maio_get_page(page);
+		return;
+	}
+
 	page = compound_head(page);
 	/*
 	 * Getting a normal page or the head of a compound page
@@ -1160,15 +1213,23 @@ bool __must_check try_grab_page(struct page *page, unsigned int flags);
 
 static inline __must_check bool try_get_page(struct page *page)
 {
-	page = compound_head(page);
-	if (WARN_ON_ONCE(page_ref_count(page) <= 0))
-		return false;
-	page_ref_inc(page);
+	if (unlikely(is_maio_page(page))) {
+		maio_get_page(page);
+	} else {
+		page = compound_head(page);
+		if (WARN_ON_ONCE(page_ref_count(page) <= 0))
+			return false;
+		page_ref_inc(page);
+	}
 	return true;
 }
 
 static inline void put_page(struct page *page)
 {
+	if (unlikely(is_maio_page(page))) {
+		maio_put_page(page);
+		return;
+	}
 	page = compound_head(page);
 
 	/*

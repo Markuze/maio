@@ -70,6 +70,7 @@
 #include <linux/psi.h>
 #include <linux/padata.h>
 #include <linux/khugepaged.h>
+#include <linux/maio.h>
 
 #include <asm/sections.h>
 #include <asm/tlbflush.h>
@@ -1081,6 +1082,8 @@ static const char *page_bad_reason(struct page *page, unsigned long flags)
 		else
 			bad_reason = "PAGE_FLAGS_CHECK_AT_FREE flag(s) set";
 	}
+	if (unlikely(is_maio_page(page)))
+		bad_reason = "Freeing MAIO Pages";
 #ifdef CONFIG_MEMCG
 	if (unlikely(page->mem_cgroup))
 		bad_reason = "page still charged to cgroup";
@@ -1139,6 +1142,10 @@ static int free_tail_pages_check(struct page *head_page, struct page *page)
 		}
 		break;
 	}
+
+	if (unlikely(is_maio_page(page)))
+		bad_page(page, "Freeing MAIO Pages");
+
 	if (unlikely(!PageTail(page))) {
 		bad_page(page, "PageTail not set");
 		goto out;
@@ -4954,7 +4961,10 @@ static inline void free_the_page(struct page *page, unsigned int order)
 	if (order == 0)		/* Via pcp? */
 		free_unref_page(page);
 	else
-		__free_pages_ok(page, order);
+		if (unlikely(is_maio_page(page)))
+			maio_page_free(page);
+		else
+			__free_pages_ok(page, order);
 }
 
 void __free_pages(struct page *page, unsigned int order)
@@ -5076,6 +5086,14 @@ void page_frag_free(void *addr)
 {
 	struct page *page = virt_to_head_page(addr);
 
+	if (unlikely(is_maio_page(page)))
+		maio_frag_free(addr);
+	/* Allow this, make sure refcounts are O.K -
+		Need to consider if page_refcount can be avoided?
+		Should happen _ONLY_ to kernel bound pages - then O.k;
+		1. elem is freed on prev line.
+		2. page ref is kept in order as MAIO always holds +1.
+	*/
 	if (unlikely(put_page_testzero(page)))
 		free_the_page(page, compound_order(page));
 }

@@ -13,6 +13,9 @@
 			} while (0)
 
 #endif
+#ifndef TRACE_DEBUG
+#define TRACE_DEBUG(...)
+#endif
 
 #define CACHE_MASK      (BIT(INTERNODE_CACHE_SHIFT) - 1)
 

@@ -2988,7 +2988,10 @@ static inline struct page *skb_frag_page(const skb_frag_t *frag)
  */
 static inline void __skb_frag_ref(skb_frag_t *frag)
 {
-	get_page(skb_frag_page(frag));
+	if (is_maio_page(skb_frag_page(frag)))
+		maio_get_page(skb_frag_page(frag));
+	else
+		get_page(skb_frag_page(frag));
 }
 
 /**
@@ -3011,7 +3014,10 @@ static inline void skb_frag_ref(struct sk_buff *skb, int f)
  */
 static inline void __skb_frag_unref(skb_frag_t *frag)
 {
-	put_page(skb_frag_page(frag));
+	if (is_maio_page(skb_frag_page(frag)))
+		maio_put_page(skb_frag_page(frag));
+	else
+		put_page(skb_frag_page(frag));
 }
 
 /**

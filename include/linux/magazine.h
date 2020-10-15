@@ -5,8 +5,8 @@
 #include <linux/spinlock.h>
 #include <linux/types.h>
 
-#define MAG_DEPTH	4
 #define MAG_COUNT	2
+#define MAG_DEPTH	4//TODO: Make an init time variable
 
 //TODO:
 //	1) Percpu
