@@ -6,7 +6,12 @@
 #include <linux/seq_file.h>
 #include <linux/string.h>
 
+#define show_line pr_err("%s:%d\n",__FUNCTION__, __LINE__)
 #define NUM_MAIO_SIZES	1
+#define HUGE_ORDER	9
+#define HUGE_SIZE	(1 <<(HUGE_ORDER + PAGE_SHIFT))
+
+static struct page* umem_pages[256 * 512];
 
 struct maio_magz {
 	struct mag_allocator 	mag[NUM_MAIO_SIZES];
@@ -20,22 +25,35 @@ static struct maio_magz global_maio;
 static inline ssize_t maio_add_page(struct file *file, const char __user *buf,
                                     size_t size, loff_t *_pos)
 {
-	char *kbuf;
-	u64   values[PROC_CSV_NUM + 1] = {0};
+	char *kbuff, *cur;
+	u64   base, uaddr;
+	size_t len;
+	long rc, i;
+	u64 prev = 0;
 
 	/* start by dragging the command into memory */
 	if (size <= 1 || size >= PAGE_SIZE)
 	        return -EINVAL;
 
-	kbuf = memdup_user_nul(buf, size);
-	if (IS_ERR(kbuf))
-	        return PTR_ERR(kbuf);
+	kbuff = memdup_user_nul(buf, size);
+	if (IS_ERR(kbuff))
+	        return PTR_ERR(kbuff);
 
 	//get_options(kbuf, ARRAY_SIZE(values), values);
-	pr_err("Got: [%s]\n", kbuf);
+	//pr_err("Got: [%s]\n", kbuff);
 
-	/* start new server */
-	kfree(kbuf);
+	base = simple_strtoull(kbuff, &cur, 16);
+	len =	simple_strtol(cur + 1, &cur, 10);
+	pr_err("Got: [%llx: %ld]\n", base, len);
+	kfree(kbuff);
+
+
+	for (i = 0; i < len; i++) {
+		u64 uaddr = base + (i * HUGE_SIZE);
+		rc = get_user_pages(uaddr, (1 << HUGE_ORDER), FOLL_LONGTERM, &umem_pages[i], NULL);
+		pr_err("[%ld]%llx[%llx:%d] \n", rc, uaddr, (unsigned long long)umem_pages[i],
+							compound_order(umem_pages[i]));
+	}
 	return size;
 }
 
@@ -49,15 +67,20 @@ static int maio_proc_show(struct seq_file *m, void *v)
 {
 	char *buffer = kzalloc(PAGE_SIZE, GFP_KERNEL);
 
+	show_line;
         seq_printf(m, "Heya!");
 	memcpy(buffer, "HelloCopy!\0", 12);
 	if (!buffer)
 		return -ENOMEM;
+	show_line;
 
 	seq_puts(m, buffer);
+	show_line;
         kfree(buffer);
+	show_line;
         seq_printf(m, "Heya!");
-        return 20;
+	show_line;
+        return 0;
 }
 
 static int maio_proc_open(struct inode *inode, struct file *file)

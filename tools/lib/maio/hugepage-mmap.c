@@ -23,8 +23,10 @@
 #include <sys/mman.h>
 #include <fcntl.h>
 
+#define NR_PAGES 16
+#define HP_SIZE (1<<21)	//2MB Files
 #define FILE_NAME "/mnt/huge/hugepagefile"
-#define LENGTH (256UL*1024*1024)
+#define LENGTH (NR_PAGES* HP_SIZE)
 #define PROTECTION (PROT_READ | PROT_WRITE)
 
 /* Only ia64 requires this */
@@ -65,7 +67,8 @@ static int read_bytes(char *addr)
 int main(void)
 {
 	void *addr;
-	int fd, ret;
+	int fd, ret, proc;
+	char write_buffer[64];
 
 	fd = open(FILE_NAME, O_CREAT | O_RDWR, 0755);
 	if (fd < 0) {
@@ -84,6 +87,16 @@ int main(void)
 	check_bytes(addr);
 	write_bytes(addr);
 	ret = read_bytes(addr);
+
+	printf("writing to maio/pages\n");
+	proc = open("/proc/maio/pages", O_RDWR);
+	if (proc < 0) {
+		perror("Open failed");
+	} else {
+		int len = snprintf(write_buffer, 64, "%p %d\n", addr, NR_PAGES);
+		write(proc, write_buffer, len);
+		close(proc);
+	}
 
 	munmap(addr, LENGTH);
 	close(fd);
