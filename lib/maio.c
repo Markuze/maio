@@ -7,31 +7,83 @@
 #include <linux/string.h>
 
 #define show_line pr_err("%s:%d\n",__FUNCTION__, __LINE__)
-#define NUM_MAIO_SIZES	1
-#define HUGE_ORDER	9
-#define HUGE_SIZE	(1 <<(HUGE_ORDER + PAGE_SHIFT))
 
-static struct page* umem_pages[256 * 512];
+#define NUM_MAIO_SIZES	1
+#define HUGE_ORDER	9 /* compound_order of 2MB HP */
+#define HUGE_SHIFT	(HUGE_ORDER + PAGE_SHIFT)
+#define HUGE_SIZE	(1 << (HUGE_SHIFT))
+
+struct maio_cached_buffer {
+	struct list_head list;
+};
+
+struct umem_region_mtt {
+	u64 start;	/* userland start region [*/
+	u64 end;	/* userland end region   ]*/
+	int len;	/* Number of HP */
+	int order;	/* Not realy needed as HUGE_ORDER is defined today */
+	struct page *pages[0];
+};
 
 struct maio_magz {
 	struct mag_allocator 	mag[NUM_MAIO_SIZES];
 	u32			num_pages;
 };
 
+/* get_user_pages */
+static struct page* umem_pages[1<<HUGE_ORDER];
+
 static struct proc_dir_entry *maio_dir;
 static struct maio_magz global_maio;
 
-#define PROC_CSV_NUM	2
+static LIST_HEAD(hp_cache);
+static unsigned long hp_cache_flags;
+DEFINE_SPINLOCK(hp_cache_lock);
+/*
+	For multiple reg ops a tree is needed
+		1. For security and rereg need owner id and mmap to specific addr.
+*/
+static struct umem_region_mtt *mtt;
+
+static inline u64 uaddr2idx(const struct umem_region_mtt *mtt, u64 uaddr)
+{
+	u64 idx;
+
+	if (unlikely(uaddr > mtt->end || uaddr < mtt->start))
+		return -EINVAL;
+
+	idx = uaddr - mtt->start;
+	return idx >> (HUGE_SHIFT);
+}
+
+static inline void maio_cache_hp(struct page *page)
+{
+	spin_lock_irqsave(&hp_cache_lock, hp_cache_flags);
+	list_add(page_address(page), &hp_cache);
+	spin_unlock_irqrestore(&hp_cache_lock, hp_cache_flags);
+}
+
+static inline void *maio_get_cached_hp(void)
+{
+	struct maio_cached_buffer *buffer;
+	spin_lock_irqsave(&hp_cache_lock, hp_cache_flags);
+
+	buffer = list_first_entry_or_null(&hp_cache,
+						struct maio_cached_buffer, list);
+	spin_unlock_irqrestore(&hp_cache_lock, hp_cache_flags);
+
+	return buffer;
+}
+
 static inline ssize_t maio_add_page(struct file *file, const char __user *buf,
                                     size_t size, loff_t *_pos)
 {
 	char *kbuff, *cur;
-	u64   base, uaddr;
+	u64   base;
 	size_t len;
 	long rc, i;
 	u64 prev = 0;
 
-	/* start by dragging the command into memory */
 	if (size <= 1 || size >= PAGE_SIZE)
 	        return -EINVAL;
 
@@ -39,20 +91,38 @@ static inline ssize_t maio_add_page(struct file *file, const char __user *buf,
 	if (IS_ERR(kbuff))
 	        return PTR_ERR(kbuff);
 
-	//get_options(kbuf, ARRAY_SIZE(values), values);
-	//pr_err("Got: [%s]\n", kbuff);
-
-	base = simple_strtoull(kbuff, &cur, 16);
-	len =	simple_strtol(cur + 1, &cur, 10);
+	base	= simple_strtoull(kbuff, &cur, 16);
+	len	= simple_strtol(cur + 1, &cur, 10);
 	pr_err("Got: [%llx: %ld]\n", base, len);
 	kfree(kbuff);
 
+	if (!(mtt = kzalloc(sizeof(struct umem_region_mtt)
+				+ len * sizeof(struct page*), GFP_KERNEL)))
+		return -ENOMEM;
+
+	mtt->start	= base;
+	mtt->end 	= base + (len * HUGE_SIZE) -1;
+	mtt->len	= len;
+	mtt->order	= HUGE_ORDER;
 
 	for (i = 0; i < len; i++) {
 		u64 uaddr = base + (i * HUGE_SIZE);
-		rc = get_user_pages(uaddr, (1 << HUGE_ORDER), FOLL_LONGTERM, &umem_pages[i], NULL);
-		pr_err("[%ld]%llx[%llx:%d] \n", rc, uaddr, (unsigned long long)umem_pages[i],
-							compound_order(umem_pages[i]));
+		rc = get_user_pages(uaddr, (1 << HUGE_ORDER), FOLL_LONGTERM, &umem_pages[0], NULL);
+		pr_err("[%ld]%llx[%llx:%d] \n", rc, uaddr, (unsigned long long)umem_pages[0],
+							compound_order(umem_pages[0]));
+		/*
+			set_maio_page. K > V.
+			record address. V > K.
+			Set pages into buffers. Magazine.
+
+		*/
+		mtt->pages[i] =	umem_pages[0];
+		if (i != uaddr2idx(mtt, uaddr))
+			pr_err("Please Fix uaddr2idx: %ld != %llx\n", i, uaddr2idx(mtt, uaddr));
+		set_maio_uaddr(umem_pages[0], uaddr);
+		/* Allow for the Allocator to get elements on demand, flexible support for variable sizes */
+		maio_cache_hp(umem_pages[0]);
+		pr_err("Added %llx:%llx to MAIO\n", uaddr, (unsigned long long)umem_pages[0]);
 	}
 	return size;
 }
