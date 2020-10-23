@@ -6,12 +6,24 @@
 #include <linux/seq_file.h>
 #include <linux/string.h>
 
+#ifndef assert
+#define assert(expr) 	do { \
+				if (unlikely(!(expr))) { \
+					trace_printk("Assertion failed! %s, %s, %s, line %d\n", \
+						   #expr, __FILE__, __func__, __LINE__); \
+					panic("ASSERT FAILED: %s (%s)", __FUNCTION__, #expr); \
+				} \
+			} while (0)
+
+#endif
+
 #define show_line pr_err("%s:%d\n",__FUNCTION__, __LINE__)
 
 #define NUM_MAIO_SIZES	1
 #define HUGE_ORDER	9 /* compound_order of 2MB HP */
 #define HUGE_SHIFT	(HUGE_ORDER + PAGE_SHIFT)
 #define HUGE_SIZE	(1 << (HUGE_SHIFT))
+#define PAGES_IN_HUGE	(1<<HUGE_ORDER)
 
 struct maio_cached_buffer {
 	struct list_head list;
@@ -31,7 +43,7 @@ struct maio_magz {
 };
 /* GLOBAL MAIO FLAG*/
 bool maio_configured;
-
+EXPORT_SYMBOL(maio_configured);
 /* get_user_pages */
 static struct page* umem_pages[1<<HUGE_ORDER];
 
@@ -65,7 +77,7 @@ static inline void maio_cache_hp(struct page *page)
 	spin_unlock_irqrestore(&hp_cache_lock, hp_cache_flags);
 }
 
-static inline void *maio_get_cached_hp(void)
+static inline struct page *maio_get_cached_hp(void)
 {
 	struct maio_cached_buffer *buffer;
 	spin_lock_irqsave(&hp_cache_lock, hp_cache_flags);
@@ -74,7 +86,7 @@ static inline void *maio_get_cached_hp(void)
 						struct maio_cached_buffer, list);
 	spin_unlock_irqrestore(&hp_cache_lock, hp_cache_flags);
 
-	return buffer;
+	return (buffer) ? virt_to_page(buffer): buffer;
 }
 
 static inline ssize_t maio_add_page(struct file *file, const char __user *buf,
@@ -155,6 +167,12 @@ static int maio_proc_show(struct seq_file *m, void *v)
         return 0;
 }
 
+static inline int order2idx(size_t order)
+{
+	/* With multiple sizes this will change*/
+	return 0;
+}
+
 static int maio_proc_open(struct inode *inode, struct file *file)
 {
         return single_open(file, maio_proc_show, PDE_DATA(inode));
@@ -171,24 +189,53 @@ void maio_frag_free(void *addr)
 }
 EXPORT_SYMBOL(maio_frag_free);
 
+static inline void maio_free_elem(void *elem, u16 order)
+{
+	mag_free_elem(&global_maio.mag[order2idx(order)], elem);
+}
+
+static inline void put_buffers(void *elem, u16 order)
+{
+	/*TODO: order may make sense some day in case of e.g., 2K buffers
+		order also makes sense for multipage allocs.
+	*/
+	maio_free_elem(elem, order);
+}
+
 void maio_page_free(struct page *page)
 {
 	/* Need to make sure we dont get only head pages here...*/
 	/* ref_count local - when 0 reached free all elemnts... - maio_frag_free*/
+	put_buffers(page_address(page), get_maio_elem_order(page));
 	return;
 }
 EXPORT_SYMBOL(maio_page_free);
 
-
-static inline int order2idx(size_t order)
+static inline void replenish_from_cache(size_t order)
 {
-	/* With multiple sizes this will change*/
-	return order;
+	int i;
+	struct page *page = maio_get_cached_hp();
+
+	trace_printk("%d: %s page:%llx\n", smp_processor_id(), __FUNCTION__, (u64)page);
+	if (unlikely(!page))
+		return;
+
+	assert(compound_order(page) == HUGE_ORDER);
+	for (i = 0; i < PAGES_IN_HUGE; i++) {
+		put_buffers(page_address(page), order);
+		page++;
+	}
 }
 
 struct page *maio_alloc_pages(size_t order)
 {
 	void *buffer = mag_alloc_elem(&global_maio.mag[order2idx(order)]);
+
+	/* should happen on init when mag is empty.*/
+	if (unlikely(!buffer)) {
+		replenish_from_cache(order);
+		buffer = mag_alloc_elem(&global_maio.mag[order2idx(order)]);
+	}
 	return (buffer) ? virt_to_page(buffer) : ERR_PTR(-ENOMEM);
 }
 EXPORT_SYMBOL(maio_alloc_pages);
