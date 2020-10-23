@@ -206,6 +206,7 @@ void maio_page_free(struct page *page)
 {
 	/* Need to make sure we dont get only head pages here...*/
 	/* ref_count local - when 0 reached free all elemnts... - maio_frag_free*/
+	trace_printk("%d: %s <- %pS\n", smp_processor_id(), __FUNCTION__, __builtin_return_address(0));
 	put_buffers(page_address(page), get_maio_elem_order(page));
 	return;
 }
@@ -236,6 +237,8 @@ struct page *maio_alloc_pages(size_t order)
 		replenish_from_cache(order);
 		buffer = mag_alloc_elem(&global_maio.mag[order2idx(order)]);
 	}
+	trace_printk("%d: %s <- %pS\n", smp_processor_id(), __FUNCTION__, __builtin_return_address(0));
+
 	return (buffer) ? virt_to_page(buffer) : ERR_PTR(-ENOMEM);
 }
 EXPORT_SYMBOL(maio_alloc_pages);
