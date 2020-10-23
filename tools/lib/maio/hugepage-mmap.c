@@ -25,7 +25,7 @@
 
 #define NR_PAGES 16
 #define HP_SIZE (1<<21)	//2MB Files
-#define FILE_NAME "/mnt/huge/hugepagefile"
+#define FILE_NAME "/media/huge/hugepagefile"
 #define LENGTH (NR_PAGES* HP_SIZE)
 #define PROTECTION (PROT_READ | PROT_WRITE)
 
