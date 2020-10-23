@@ -2,7 +2,7 @@
 
 echo "setup hugepages"
 
-sudo sh -c "echo 512 > /proc/sys/vm/nr_hugepages"
+sudo sh -c "echo 1024 > /proc/sys/vm/nr_hugepages"
 sudo mkdir -p /media/huge
 sudo mount -t hugetlbfs none /media/huge
 
