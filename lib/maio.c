@@ -86,7 +86,7 @@ static inline struct page *maio_get_cached_hp(void)
 						struct maio_cached_buffer, list);
 	spin_unlock_irqrestore(&hp_cache_lock, hp_cache_flags);
 
-	return (buffer) ? virt_to_page(buffer): buffer;
+	return (buffer) ? virt_to_page(buffer): NULL;
 }
 
 static inline ssize_t maio_add_page(struct file *file, const char __user *buf,
@@ -96,7 +96,6 @@ static inline ssize_t maio_add_page(struct file *file, const char __user *buf,
 	u64   base;
 	size_t len;
 	long rc, i;
-	u64 prev = 0;
 
 	if (size <= 1 || size >= PAGE_SIZE)
 	        return -EINVAL;
@@ -180,11 +179,12 @@ static int maio_proc_open(struct inode *inode, struct file *file)
 
 void maio_frag_free(void *addr)
 {
-	struct page *page = virt_to_head_page(addr);
 	/*
+	struct page *page = virt_to_head_page(addr);
 		1. get idx
 		2. mag free...
 	*/
+	panic("FUNCTION NOT IMPLEMENTED (%s)", __FUNCTION__); \
 	return;
 }
 EXPORT_SYMBOL(maio_frag_free);
