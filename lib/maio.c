@@ -137,6 +137,9 @@ static inline ssize_t maio_add_page(struct file *file, const char __user *buf,
 		maio_cache_hp(umem_pages[0]);
 		pr_err("Added %llx:%llx to MAIO\n", uaddr, (unsigned long long)umem_pages[0]);
 	}
+
+	trace_printk("%d: %s maio_configured\n", smp_processor_id(), __FUNCTION__);
+	maio_configured = true;
 	return size;
 }
 
@@ -260,6 +263,7 @@ static inline void proc_init(void)
 static __init int maio_init(void)
 {
 	int i = 0;
+
 	maio_configured = false;
 	for (;i< NUM_MAIO_SIZES; i++)
 		mag_allocator_init(&global_maio.mag[i]);
