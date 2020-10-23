@@ -936,12 +936,14 @@ static inline void set_compound_order(struct page *page, unsigned int order)
 
 static inline void maio_put_page(struct page *page)
 {
+	/*TODO: Need to find relevant head on multipage allocs*/
 	if (put_page_testzero(page))
 		maio_page_free(page);
 }
 
 static inline void maio_get_page(struct page *page)
 {
+	/*TODO: Need to find relevant head on multipage allocs*/
 	page_ref_inc(page);
 }
 
@@ -1226,7 +1228,7 @@ static inline __must_check bool try_get_page(struct page *page)
 
 static inline void put_page(struct page *page)
 {
-	if (unlikely(is_maio_page(page))) {
+	if (is_maio_page(page)) {
 		maio_put_page(page);
 		return;
 	}

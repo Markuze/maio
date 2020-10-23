@@ -29,6 +29,8 @@ struct maio_magz {
 	struct mag_allocator 	mag[NUM_MAIO_SIZES];
 	u32			num_pages;
 };
+/* GLOBAL MAIO FLAG*/
+bool maio_configured;
 
 /* get_user_pages */
 static struct page* umem_pages[1<<HUGE_ORDER];
@@ -158,20 +160,6 @@ static int maio_proc_open(struct inode *inode, struct file *file)
         return single_open(file, maio_proc_show, PDE_DATA(inode));
 }
 
-static const struct proc_ops maio_proc_ops = {
-        .proc_open      = maio_proc_open,
-        .proc_read      = seq_read,
-        .proc_lseek     = seq_lseek,
-        .proc_release   = single_release,
-        .proc_write     = maio_proc_write,
-};
-
-static inline void proc_init(void)
-{
-	maio_dir = proc_mkdir_mode("maio", 00555, NULL);
-        proc_create_data("pages", 00666, maio_dir, &maio_proc_ops, NULL);
-}
-
 void maio_frag_free(void *addr)
 {
 	struct page *page = virt_to_head_page(addr);
@@ -191,10 +179,38 @@ void maio_page_free(struct page *page)
 }
 EXPORT_SYMBOL(maio_page_free);
 
+
+static inline int order2idx(size_t order)
+{
+	/* With multiple sizes this will change*/
+	return order;
+}
+
+struct page *maio_alloc_pages(size_t order)
+{
+	void *buffer = mag_alloc_elem(&global_maio.mag[order2idx(order)]);
+	return (buffer) ? virt_to_page(buffer) : ERR_PTR(-ENOMEM);
+}
+EXPORT_SYMBOL(maio_alloc_pages);
+
+static const struct proc_ops maio_proc_ops = {
+        .proc_open      = maio_proc_open,
+        .proc_read      = seq_read,
+        .proc_lseek     = seq_lseek,
+        .proc_release   = single_release,
+        .proc_write     = maio_proc_write,
+};
+
+static inline void proc_init(void)
+{
+	maio_dir = proc_mkdir_mode("maio", 00555, NULL);
+        proc_create_data("pages", 00666, maio_dir, &maio_proc_ops, NULL);
+}
+
 static __init int maio_init(void)
 {
 	int i = 0;
-
+	maio_configured = false;
 	for (;i< NUM_MAIO_SIZES; i++)
 		mag_allocator_init(&global_maio.mag[i]);
 
