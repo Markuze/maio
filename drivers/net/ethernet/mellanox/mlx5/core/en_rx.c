@@ -262,8 +262,10 @@ static inline bool mlx5e_rx_cache_get(struct mlx5e_rq *rq,
 static inline int mlx5e_page_alloc_pool(struct mlx5e_rq *rq,
 					struct mlx5e_dma_info *dma_info)
 {
+/*
 	if (mlx5e_rx_cache_get(rq, dma_info))
 		return 0;
+*/
 	if (maio_configured)
 		dma_info->page = maio_alloc_page();
 	else
@@ -302,8 +304,10 @@ void mlx5e_page_release_dynamic(struct mlx5e_rq *rq,
 				bool recycle)
 {
 	if (likely(recycle)) {
+/*
 		if (mlx5e_rx_cache_put(rq, dma_info))
 			return;
+*/
 		mlx5e_page_dma_unmap(rq, dma_info);
 		page_pool_recycle_direct(rq->page_pool, dma_info->page);
 	} else {
@@ -1767,6 +1771,7 @@ int mlx5e_rq_set_handlers(struct mlx5e_rq *rq, struct mlx5e_params *params, bool
 
 	switch (rq->wq_type) {
 	case MLX5_WQ_TYPE_LINKED_LIST_STRIDING_RQ:
+		trace_printk("type: %s\n", "MLX5_WQ_TYPE_LINKED_LIST_STRIDING_RQ");
 		rq->mpwqe.skb_from_cqe_mpwrq = xsk ?
 			mlx5e_xsk_skb_from_cqe_mpwrq_linear :
 			mlx5e_rx_mpwqe_is_linear_skb(mdev, params, NULL) ?
@@ -1788,6 +1793,7 @@ int mlx5e_rq_set_handlers(struct mlx5e_rq *rq, struct mlx5e_params *params, bool
 		}
 		break;
 	default: /* MLX5_WQ_TYPE_CYCLIC */
+		trace_printk("type: %s\n", "MLX5_WQ_TYPE_CYCLIC");
 		rq->wqe.skb_from_cqe = xsk ?
 			mlx5e_xsk_skb_from_cqe_linear :
 			mlx5e_rx_is_linear_skb(params, NULL) ?
