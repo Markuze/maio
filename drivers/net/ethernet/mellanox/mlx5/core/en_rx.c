@@ -34,6 +34,7 @@
 #include <linux/ip.h>
 #include <linux/ipv6.h>
 #include <linux/tcp.h>
+#include <linux/maio.h>
 #include <net/ip6_checksum.h>
 #include <net/page_pool.h>
 #include <net/inet_ecn.h>
@@ -263,8 +264,10 @@ static inline int mlx5e_page_alloc_pool(struct mlx5e_rq *rq,
 {
 	if (mlx5e_rx_cache_get(rq, dma_info))
 		return 0;
-
-	dma_info->page = page_pool_dev_alloc_pages(rq->page_pool);
+	if (maio_configured)
+		dma_info->page = maio_alloc_page();
+	else
+		dma_info->page = page_pool_dev_alloc_pages(rq->page_pool);
 	if (unlikely(!dma_info->page))
 		return -ENOMEM;
 
@@ -279,6 +282,7 @@ static inline int mlx5e_page_alloc_pool(struct mlx5e_rq *rq,
 	return 0;
 }
 
+/*TODO: Change this behavior */
 static inline int mlx5e_page_alloc(struct mlx5e_rq *rq,
 				   struct mlx5e_dma_info *dma_info)
 {
@@ -300,7 +304,6 @@ void mlx5e_page_release_dynamic(struct mlx5e_rq *rq,
 	if (likely(recycle)) {
 		if (mlx5e_rx_cache_put(rq, dma_info))
 			return;
-
 		mlx5e_page_dma_unmap(rq, dma_info);
 		page_pool_recycle_direct(rq->page_pool, dma_info->page);
 	} else {
@@ -340,6 +343,7 @@ static inline int mlx5e_get_rx_frag(struct mlx5e_rq *rq,
 	return err;
 }
 
+/*TODO: Eehm... look at this... */
 static inline void mlx5e_put_rx_frag(struct mlx5e_rq *rq,
 				     struct mlx5e_wqe_frag_info *frag,
 				     bool recycle)
@@ -1177,6 +1181,7 @@ mlx5e_skb_from_cqe_nonlinear(struct mlx5e_rq *rq, struct mlx5_cqe64 *cqe,
 	/* XDP is not supported in this configuration, as incoming packets
 	 * might spread among multiple pages.
 	 */
+	/*TODO: Need to check these...*/
 	skb = napi_alloc_skb(rq->cq.napi,
 			     ALIGN(MLX5E_RX_MAX_HEAD, sizeof(long)));
 	if (unlikely(!skb)) {
@@ -1392,6 +1397,10 @@ mlx5e_skb_from_cqe_mpwrq_nonlinear(struct mlx5e_rq *rq, struct mlx5e_mpw_info *w
 	struct mlx5e_dma_info *head_di = di;
 	struct sk_buff *skb;
 
+	/* TODO: These will not be ZC - unless napi_alloc_skb uses MAIO:
+		The thing is I dont need to, due to --- the data being duplicated.
+		I can still pass on the pages ZC. - I dont mind the copy...
+	*/
 	skb = napi_alloc_skb(rq->cq.napi,
 			     ALIGN(MLX5E_RX_MAX_HEAD, sizeof(long)));
 	if (unlikely(!skb)) {
