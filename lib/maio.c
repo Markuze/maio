@@ -180,18 +180,6 @@ static int maio_proc_open(struct inode *inode, struct file *file)
         return single_open(file, maio_proc_show, PDE_DATA(inode));
 }
 
-void maio_frag_free(void *addr)
-{
-	/*
-	struct page *page = virt_to_head_page(addr);
-		1. get idx
-		2. mag free...
-	*/
-	panic("FUNCTION NOT IMPLEMENTED (%s)", __FUNCTION__); \
-	return;
-}
-EXPORT_SYMBOL(maio_frag_free);
-
 static inline void maio_free_elem(void *elem, u16 order)
 {
 	mag_free_elem(&global_maio.mag[order2idx(order)], elem);
@@ -205,11 +193,33 @@ static inline void put_buffers(void *elem, u16 order)
 	maio_free_elem(elem, order);
 }
 
+
+void maio_frag_free(void *addr)
+{
+	/*
+	struct page *page = virt_to_head_page(addr);
+		1. get idx
+		2. mag free...
+	*/
+	struct page* page = virt_to_page(addr); /* TODO: Align on elem order*/
+	trace_printk("%d:%s: %pS\n", smp_processor_id(), __FUNCTION__, __builtin_return_address(0));
+	trace_printk("%d:%s:%llx\n", smp_processor_id(), __FUNCTION__, (u64)page);
+	assert(is_maio_page(page));
+	assert(page_ref_count(page) == 0);
+	put_buffers(page_address(page), get_maio_elem_order(page));
+
+	return;
+}
+EXPORT_SYMBOL(maio_frag_free);
+
 void maio_page_free(struct page *page)
 {
 	/* Need to make sure we dont get only head pages here...*/
 	/* ref_count local - when 0 reached free all elemnts... - maio_frag_free*/
-	trace_printk("%d: %s <- %pS\n", smp_processor_id(), __FUNCTION__, __builtin_return_address(0));
+	trace_printk("%d:%s: %pS\n", smp_processor_id(), __FUNCTION__, __builtin_return_address(0));
+	trace_printk("%d:%s:%llx\n", smp_processor_id(), __FUNCTION__, (u64)page);
+	assert(is_maio_page(page));
+	assert(page_ref_count(page) == 0);
 	put_buffers(page_address(page), get_maio_elem_order(page));
 	return;
 }
@@ -233,6 +243,7 @@ static inline void replenish_from_cache(size_t order)
 
 struct page *maio_alloc_pages(size_t order)
 {
+	struct page *page;
 	void *buffer = mag_alloc_elem(&global_maio.mag[order2idx(order)]);
 
 	/* should happen on init when mag is empty.*/
@@ -240,9 +251,16 @@ struct page *maio_alloc_pages(size_t order)
 		replenish_from_cache(order);
 		buffer = mag_alloc_elem(&global_maio.mag[order2idx(order)]);
 	}
-	trace_printk("%d: %s <- %pS\n", smp_processor_id(), __FUNCTION__, __builtin_return_address(0));
 
-	return (buffer) ? virt_to_page(buffer) : ERR_PTR(-ENOMEM);
+	page =  (buffer) ? virt_to_page(buffer) : ERR_PTR(-ENOMEM);
+	if (likely(page)) {
+		/*TODO: This is due to mellanox wierdness (i.e., caching)*/
+		set_page_count(page, 0);
+	}
+	trace_printk("%d:%s: %pS\n", smp_processor_id(), __FUNCTION__, __builtin_return_address(0));
+	trace_printk("%d:%s:%llx\n", smp_processor_id(), __FUNCTION__, (u64)page);
+
+	return page;
 }
 EXPORT_SYMBOL(maio_alloc_pages);
 
