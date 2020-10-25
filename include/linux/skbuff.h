@@ -3014,6 +3014,9 @@ static inline void skb_frag_ref(struct sk_buff *skb, int f)
  */
 static inline void __skb_frag_unref(skb_frag_t *frag)
 {
+	trace_printk("%d:%s:%llx[%d]\n", smp_processor_id(), __FUNCTION__,
+			(u64)skb_frag_page(frag), page_ref_count(skb_frag_page(frag)));
+
 	if (is_maio_page(skb_frag_page(frag)))
 		maio_put_page(skb_frag_page(frag));
 	else
