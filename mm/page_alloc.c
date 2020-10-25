@@ -5086,8 +5086,16 @@ void page_frag_free(void *addr)
 {
 	struct page *page = virt_to_head_page(addr);
 
-	if (unlikely(is_maio_page(page)))
-		maio_frag_free(addr);
+	if (is_maio_page(page)) {
+		page = virt_to_page(addr);
+		if (unlikely(put_page_testzero(page)))
+			maio_frag_free(addr);
+		else
+			trace_printk("%d:%s:%llx[%d]\n", smp_processor_id(), __FUNCTION__,
+					(u64)page, page_ref_count(page));
+		return;
+	}
+
 	/* Allow this, make sure refcounts are O.K -
 		Need to consider if page_refcount can be avoided?
 		Should happen _ONLY_ to kernel bound pages - then O.k;
