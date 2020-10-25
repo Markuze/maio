@@ -23,7 +23,7 @@
 #include <sys/mman.h>
 #include <fcntl.h>
 
-#define NR_PAGES 1024
+#define NR_PAGES 512
 #define HP_SIZE (1<<21)	//2MB Files
 #define FILE_NAME "/media/huge/hugepagefile"
 #define LENGTH (NR_PAGES* HP_SIZE)
