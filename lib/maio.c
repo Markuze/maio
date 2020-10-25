@@ -72,8 +72,9 @@ static inline u64 uaddr2idx(const struct umem_region_mtt *mtt, u64 uaddr)
 
 static inline void maio_cache_hp(struct page *page)
 {
+	struct maio_cached_buffer *buffer = page_address(page);
 	spin_lock_irqsave(&hp_cache_lock, hp_cache_flags);
-	list_add(page_address(page), &hp_cache);
+	list_add(&buffer->list, &hp_cache);
 	spin_unlock_irqrestore(&hp_cache_lock, hp_cache_flags);
 }
 
@@ -84,6 +85,7 @@ static inline struct page *maio_get_cached_hp(void)
 
 	buffer = list_first_entry_or_null(&hp_cache,
 						struct maio_cached_buffer, list);
+	list_del(&buffer->list);
 	spin_unlock_irqrestore(&hp_cache_lock, hp_cache_flags);
 
 	return (buffer) ? virt_to_page(buffer): NULL;
@@ -236,6 +238,7 @@ static inline void replenish_from_cache(size_t order)
 
 	assert(compound_order(page) == HUGE_ORDER);
 	for (i = 0; i < PAGES_IN_HUGE; i++) {
+		set_page_count(page, 0);
 		put_buffers(page_address(page), order);
 		page++;
 	}
@@ -254,6 +257,7 @@ struct page *maio_alloc_pages(size_t order)
 
 	page =  (buffer) ? virt_to_page(buffer) : ERR_PTR(-ENOMEM);
 	if (likely(page)) {
+		assert(page_ref_count(page) == 0);
 		init_page_count(page);
 	}
 	trace_printk("%d:%s: %pS\n", smp_processor_id(), __FUNCTION__, __builtin_return_address(0));
