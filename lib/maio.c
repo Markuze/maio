@@ -254,8 +254,7 @@ struct page *maio_alloc_pages(size_t order)
 
 	page =  (buffer) ? virt_to_page(buffer) : ERR_PTR(-ENOMEM);
 	if (likely(page)) {
-		/*TODO: This is due to mellanox wierdness (i.e., caching)*/
-		set_page_count(page, 0);
+		init_page_count(page);
 	}
 	trace_printk("%d:%s: %pS\n", smp_processor_id(), __FUNCTION__, __builtin_return_address(0));
 	trace_printk("%d:%s:%llx\n", smp_processor_id(), __FUNCTION__, (u64)page);
