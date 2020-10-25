@@ -273,6 +273,9 @@ static inline int mlx5e_page_alloc_pool(struct mlx5e_rq *rq,
 	if (unlikely(!dma_info->page))
 		return -ENOMEM;
 
+        trace_printk("%d:%s:%llx[]%d\n", smp_processor_id(), __FUNCTION__,
+			(u64)dma_info->page, page_ref_count(dma_info->page));
+
 	dma_info->addr = dma_map_page(rq->pdev, dma_info->page, 0,
 				      PAGE_SIZE, rq->buff.map_dir);
 	if (unlikely(dma_mapping_error(rq->pdev, dma_info->addr))) {
@@ -445,7 +448,10 @@ mlx5e_add_skb_frag(struct mlx5e_rq *rq, struct sk_buff *skb,
 	dma_sync_single_for_cpu(rq->pdev,
 				di->addr + frag_offset,
 				len, DMA_FROM_DEVICE);
-	page_ref_inc(di->page);
+	/* pages need to be alloceds with refcount 0 */
+	page_ref_inc(di->page); /* get_page?!  - works only when alloc iorder is 0!! */
+        trace_printk("%d:%s:%llx[]%d\n", smp_processor_id(), __FUNCTION__,
+			(u64)di->page, page_ref_count(di->page));
 	skb_add_rx_frag(skb, skb_shinfo(skb)->nr_frags,
 			di->page, frag_offset, len, truesize);
 }
@@ -1167,6 +1173,8 @@ mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq, struct mlx5_cqe64 *cqe,
 
 	/* queue up for recycling/reuse */
 	page_ref_inc(di->page);
+        trace_printk("%d:%s:%llx[]%d\n", smp_processor_id(), __FUNCTION__,
+				(u64)di->page, page_ref_count(di->page));
 
 	return skb;
 }
@@ -1482,6 +1490,8 @@ mlx5e_skb_from_cqe_mpwrq_linear(struct mlx5e_rq *rq, struct mlx5e_mpw_info *wi,
 
 	/* queue up for recycling/reuse */
 	page_ref_inc(di->page);
+        trace_printk("%d:%s:%llx[]%d\n", smp_processor_id(), __FUNCTION__,
+			(u64)di->page, page_ref_count(di->page));
 
 	return skb;
 }
