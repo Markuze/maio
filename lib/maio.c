@@ -53,6 +53,7 @@ static struct maio_magz global_maio;
 static LIST_HEAD(hp_cache);
 static unsigned long hp_cache_flags;
 DEFINE_SPINLOCK(hp_cache_lock);
+static unsigned long hp_cache_size;
 /*
 	For multiple reg ops a tree is needed
 		1. For security and rereg need owner id and mmap to specific addr.
@@ -75,6 +76,7 @@ static inline void maio_cache_hp(struct page *page)
 	struct maio_cached_buffer *buffer = page_address(page);
 	spin_lock_irqsave(&hp_cache_lock, hp_cache_flags);
 	list_add(&buffer->list, &hp_cache);
+	++hp_cache_size;
 	spin_unlock_irqrestore(&hp_cache_lock, hp_cache_flags);
 }
 
@@ -85,10 +87,12 @@ static inline struct page *maio_get_cached_hp(void)
 
 	buffer = list_first_entry_or_null(&hp_cache,
 						struct maio_cached_buffer, list);
-	if (buffer)
+	if (likely(buffer)) {
 		list_del(&buffer->list);
-	else
+		--hp_cache_size;
+	} else {
 		panic("Exhausted page cache!");
+	}
 	spin_unlock_irqrestore(&hp_cache_lock, hp_cache_flags);
 
 	return (buffer) ? virt_to_page(buffer): NULL;
@@ -235,7 +239,8 @@ static inline void replenish_from_cache(size_t order)
 	int i;
 	struct page *page = maio_get_cached_hp();
 
-	trace_printk("%d: %s page:%llx\n", smp_processor_id(), __FUNCTION__, (u64)page);
+	trace_printk("%d: %s page:%llx [cache size=%lu]\n",
+			smp_processor_id(), __FUNCTION__, (u64)page, hp_cache_size);
 	if (unlikely(!page))
 		return;
 
@@ -257,9 +262,8 @@ struct page *maio_alloc_pages(size_t order)
 		replenish_from_cache(order);
 		buffer = mag_alloc_elem(&global_maio.mag[order2idx(order)]);
 	}
-
+	assert(buffer != NULL);//should not happen
 	page =  (buffer) ? virt_to_page(buffer) : ERR_PTR(-ENOMEM);
-	assert(page=!0); //This should not happen...
 	if (likely(page)) {
 		assert(page_ref_count(page) == 0);
 		init_page_count(page);

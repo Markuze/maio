@@ -23,10 +23,10 @@
 #include <sys/mman.h>
 #include <fcntl.h>
 
-#define NR_PAGES (1024 - 128)
+#define NR_PAGES (1536ULL)
 #define HP_SIZE (1<<21)	//2MB Files
 #define FILE_NAME "/media/huge/hugepagefile"
-#define LENGTH (NR_PAGES* HP_SIZE)
+#define LENGTH (NR_PAGES * HP_SIZE)
 #define PROTECTION (PROT_READ | PROT_WRITE)
 
 /* Only ia64 requires this */
@@ -93,7 +93,7 @@ int main(void)
 	if (proc < 0) {
 		perror("Open failed");
 	} else {
-		int len = snprintf(write_buffer, 64, "%p %d\n", addr, NR_PAGES);
+		int len = snprintf(write_buffer, 64, "%p %llu [%llu]\n", addr, NR_PAGES, LENGTH);
 		write(proc, write_buffer, len);
 		close(proc);
 	}
