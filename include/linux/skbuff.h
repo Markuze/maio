@@ -3017,7 +3017,7 @@ static inline void __skb_frag_unref(skb_frag_t *frag)
 	trace_printk("%d:%s:%llx[%d]\n", smp_processor_id(), __FUNCTION__,
 			(u64)skb_frag_page(frag), page_ref_count(skb_frag_page(frag)));
 
-	if (unlikely(page_ref_count(skb_frag_page(frag) <= 0 ))) {
+	if (unlikely(page_ref_count(skb_frag_page(frag)) <= 0 )) {
 		pr_err("%d:%s:%llx[%d]\n", smp_processor_id(), __FUNCTION__,
 				(u64)skb_frag_page(frag), page_ref_count(skb_frag_page(frag)));
 		panic("refcount BUG");

@@ -85,7 +85,10 @@ static inline struct page *maio_get_cached_hp(void)
 
 	buffer = list_first_entry_or_null(&hp_cache,
 						struct maio_cached_buffer, list);
-	list_del(&buffer->list);
+	if (buffer)
+		list_del(&buffer->list);
+	else
+		panic("Exhausted page cache!");
 	spin_unlock_irqrestore(&hp_cache_lock, hp_cache_flags);
 
 	return (buffer) ? virt_to_page(buffer): NULL;
@@ -256,6 +259,7 @@ struct page *maio_alloc_pages(size_t order)
 	}
 
 	page =  (buffer) ? virt_to_page(buffer) : ERR_PTR(-ENOMEM);
+	assert(page=!0); //This should not happen...
 	if (likely(page)) {
 		assert(page_ref_count(page) == 0);
 		init_page_count(page);
