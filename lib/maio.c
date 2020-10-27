@@ -9,7 +9,7 @@
 #ifndef assert
 #define assert(expr) 	do { \
 				if (unlikely(!(expr))) { \
-					trace_printk("Assertion failed! %s, %s, %s, line %d\n", \
+					pr_err("Assertion failed! %s, %s, %s, line %d\n", \
 						   #expr, __FILE__, __func__, __LINE__); \
 					panic("ASSERT FAILED: %s (%s)", __FUNCTION__, #expr); \
 				} \
