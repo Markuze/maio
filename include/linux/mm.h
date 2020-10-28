@@ -936,6 +936,7 @@ static inline void set_compound_order(struct page *page, unsigned int order)
 
 static inline void maio_put_page(struct page *page)
 {
+	VM_BUG_ON_PAGE(page_ref_count(page) < 1, page);
 	/*TODO: Need to find relevant head on multipage allocs*/
 	if (put_page_testzero(page))
 		maio_page_free(page);
