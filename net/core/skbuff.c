@@ -4131,7 +4131,7 @@ int skb_gro_receive(struct sk_buff *p, struct sk_buff *skb)
 	} else if (skb->head_frag) {
 		int nr_frags = pinfo->nr_frags;
 		skb_frag_t *frag = pinfo->frags + nr_frags;
-		struct page *page = virt_to_head_page(skb->head);
+		struct page *page = virt_to_head_page(skb->head); /* Here's the BUG!!! */
 		unsigned int first_size = headlen - offset;
 		unsigned int first_offset;
 
