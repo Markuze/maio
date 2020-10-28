@@ -78,6 +78,7 @@ int main(void)
 
 	addr = mmap(ADDR, LENGTH, PROTECTION, FLAGS, fd, 0);
 	if (addr == MAP_FAILED) {
+		printf("Error Mapping %llu [%llu]\n", LENGHT, NR_PAGES);
 		perror("mmap");
 		unlink(FILE_NAME);
 		exit(1);
@@ -93,7 +94,7 @@ int main(void)
 	if (proc < 0) {
 		perror("Open failed");
 	} else {
-		int len = snprintf(write_buffer, 64, "%p %llu [%llu]\n", addr, NR_PAGES, LENGTH);
+		int len = snprintf(write_buffer, 64, "%p %llu\n", addr, NR_PAGES);
 		write(proc, write_buffer, len);
 		close(proc);
 	}
