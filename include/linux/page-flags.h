@@ -183,11 +183,11 @@ static inline struct page *compound_head(struct page *page)
 
 	if (head & 1) {
 		struct page *hp =  (struct page *) (head - 1);
-		if (!hp[1].uaddr)
-			return hp;
-		//trace_printk("%d:%s:%llx\n", smp_processor_id(), __FUNCTION__, (u64)page);
-		/*TODO: WTF warning? */
-		trace_printk("%pS:%s:%llx\n", __builtin_return_address(0), __FUNCTION__, (u64)page);
+		if (hp[1].uaddr) {
+			/*TODO: WTF warning? */
+			trace_printk("%pS:%s:%llx\n", __builtin_return_address(0), __FUNCTION__, (u64)page);
+		}
+		return hp;
 	}
 	return page;
 }
