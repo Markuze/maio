@@ -144,7 +144,7 @@ static inline ssize_t maio_add_page(struct file *file, const char __user *buf,
 		set_maio_uaddr(umem_pages[0], uaddr);
 		/* Allow for the Allocator to get elements on demand, flexible support for variable sizes */
 		maio_cache_hp(umem_pages[0]);
-		pr_err("Added %llx:%llx to MAIO\n", uaddr, (unsigned long long)umem_pages[0]);
+		pr_err("Added %llx:%llx to MAIO\n", uaddr, (u64)umem_pages[0], get_maio_uaddr(umem_pages[0]));
 	}
 
 	trace_printk("%d: %s maio_configured\n", smp_processor_id(), __FUNCTION__);
@@ -266,6 +266,7 @@ struct page *maio_alloc_pages(size_t order)
 	page =  (buffer) ? virt_to_page(buffer) : ERR_PTR(-ENOMEM);
 	if (likely(page)) {
 		assert(page_ref_count(page) == 0);
+		assert(is_maio_page(page));
 		init_page_count(page);
 	}
 	trace_printk("%d:%s: %pS\n", smp_processor_id(), __FUNCTION__, __builtin_return_address(0));

@@ -975,8 +975,7 @@ static inline bool is_maio_page(struct page *page)
 	if (!PageCompound(page))
 		return 0;
 
-	page = compound_head(page);
-	return (get_maio_uaddr(compound_head(page))) ? 1 : 0;
+	return (get_maio_uaddr(page)) ? 1 : 0;
 }
 
 /* Returns the number of pages in this potentially compound page. */
