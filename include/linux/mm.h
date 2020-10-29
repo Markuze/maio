@@ -945,6 +945,7 @@ static inline void maio_put_page(struct page *page)
 static inline void maio_get_page(struct page *page)
 {
 	/*TODO: Need to find relevant head on multipage allocs*/
+	VM_BUG_ON_PAGE(page_ref_count(page) < 1, page);
 	page_ref_inc(page);
 }
 

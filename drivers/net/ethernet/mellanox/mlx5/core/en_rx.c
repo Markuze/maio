@@ -272,10 +272,10 @@ static inline int mlx5e_page_alloc_pool(struct mlx5e_rq *rq,
 		dma_info->page = page_pool_dev_alloc_pages(rq->page_pool);
 	if (unlikely(!dma_info->page))
 		return -ENOMEM;
-
+/*
         trace_printk("%d:%s:%llx[%d]\n", smp_processor_id(), __FUNCTION__,
 			(u64)dma_info->page, page_ref_count(dma_info->page));
-
+*/
 	dma_info->addr = dma_map_page(rq->pdev, dma_info->page, 0,
 				      PAGE_SIZE, rq->buff.map_dir);
 	if (unlikely(dma_mapping_error(rq->pdev, dma_info->addr))) {
@@ -364,9 +364,11 @@ static inline void mlx5e_put_rx_frag(struct mlx5e_rq *rq,
 				     struct mlx5e_wqe_frag_info *frag,
 				     bool recycle)
 {
+/*
 	if (is_maio_page(frag->di->page))
 		 trace_printk("%pS:%s:%llx\n", __builtin_return_address(0), __FUNCTION__,
                                (unsigned long long)frag->di->page);
+*/
 	if (frag->last_in_page)
 		mlx5e_page_release(rq, frag->di, recycle);
 }
@@ -461,9 +463,11 @@ mlx5e_add_skb_frag(struct mlx5e_rq *rq, struct sk_buff *skb,
 				di->addr + frag_offset,
 				len, DMA_FROM_DEVICE);
 	/* pages need to be alloceds with refcount 0 */
-	page_ref_inc(di->page); /* get_page?!  - works only when alloc iorder is 0!! */
+	page_ref_inc(di->page);
+/*
         trace_printk("%d:%s:%llx[%d]\n", smp_processor_id(), __FUNCTION__,
 			(u64)di->page, page_ref_count(di->page));
+*/
 	skb_add_rx_frag(skb, skb_shinfo(skb)->nr_frags,
 			di->page, frag_offset, len, truesize);
 }
@@ -1185,9 +1189,10 @@ mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq, struct mlx5_cqe64 *cqe,
 
 	/* queue up for recycling/reuse */
 	page_ref_inc(di->page);
+/*
         trace_printk("%d:%s:%llx[%d]\n", smp_processor_id(), __FUNCTION__,
 				(u64)di->page, page_ref_count(di->page));
-
+*/
 	return skb;
 }
 
@@ -1502,9 +1507,10 @@ mlx5e_skb_from_cqe_mpwrq_linear(struct mlx5e_rq *rq, struct mlx5e_mpw_info *wi,
 
 	/* queue up for recycling/reuse */
 	page_ref_inc(di->page);
+/*
         trace_printk("%d:%s:%llx[%d]\n", smp_processor_id(), __FUNCTION__,
 			(u64)di->page, page_ref_count(di->page));
-
+*/
 	return skb;
 }
 

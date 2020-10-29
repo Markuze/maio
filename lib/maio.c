@@ -9,7 +9,7 @@
 #ifndef assert
 #define assert(expr) 	do { \
 				if (unlikely(!(expr))) { \
-					pr_err("Assertion failed! %s, %s, %s, line %d\n", \
+					pr_alert("Assertion failed! %s, %s, %s, line %d\n", \
 						   #expr, __FILE__, __func__, __LINE__); \
 					panic("ASSERT FAILED: %s (%s)", __FUNCTION__, #expr); \
 				} \
@@ -211,8 +211,8 @@ void maio_frag_free(void *addr)
 		2. mag free...
 	*/
 	struct page* page = virt_to_page(addr); /* TODO: Align on elem order*/
-	trace_printk("%d:%s: %pS\n", smp_processor_id(), __FUNCTION__, __builtin_return_address(0));
-	trace_printk("%d:%s:%llx\n", smp_processor_id(), __FUNCTION__, (u64)page);
+	//trace_printk("%d:%s: %pS\n", smp_processor_id(), __FUNCTION__, __builtin_return_address(0));
+	//trace_printk("%d:%s:%llx\n", smp_processor_id(), __FUNCTION__, (u64)page);
 	assert(is_maio_page(page));
 	assert(page_ref_count(page) == 0);
 	put_buffers(page_address(page), get_maio_elem_order(page));
@@ -225,8 +225,8 @@ void maio_page_free(struct page *page)
 {
 	/* Need to make sure we dont get only head pages here...*/
 	/* ref_count local - when 0 reached free all elemnts... - maio_frag_free*/
-	trace_printk("%d:%s: %pS\n", smp_processor_id(), __FUNCTION__, __builtin_return_address(0));
-	trace_printk("%d:%s:%llx\n", smp_processor_id(), __FUNCTION__, (u64)page);
+	//	trace_printk("%d:%s: %pS\n", smp_processor_id(), __FUNCTION__, __builtin_return_address(0));
+	//trace_printk("%d:%s:%llx\n", smp_processor_id(), __FUNCTION__, (u64)page);
 	assert(is_maio_page(page));
 	assert(page_ref_count(page) == 0);
 	put_buffers(page_address(page), get_maio_elem_order(page));
@@ -269,8 +269,8 @@ struct page *maio_alloc_pages(size_t order)
 		assert(is_maio_page(page));
 		init_page_count(page);
 	}
-	trace_printk("%d:%s: %pS\n", smp_processor_id(), __FUNCTION__, __builtin_return_address(0));
-	trace_printk("%d:%s:%llx\n", smp_processor_id(), __FUNCTION__, (u64)page);
+	//trace_printk("%d:%s: %pS\n", smp_processor_id(), __FUNCTION__, __builtin_return_address(0));
+	//trace_printk("%d:%s:%llx\n", smp_processor_id(), __FUNCTION__, (u64)page);
 
 	return page;
 }
