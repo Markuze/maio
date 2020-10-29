@@ -978,6 +978,17 @@ static inline bool is_maio_page(struct page *page)
 	return (get_maio_uaddr(page)) ? 1 : 0;
 }
 
+static inline struct page *virt_to_head_maio_page(const void *x)
+{
+	struct page *page = virt_to_page(x);
+
+	/* TODO: Fix this API for multipage MAIO alloc */
+	if (is_maio_page(page))
+		return page;
+	return compound_head(page);
+}
+
+
 /* Returns the number of pages in this potentially compound page. */
 static inline unsigned long compound_nr(struct page *page)
 {

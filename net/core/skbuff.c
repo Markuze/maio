@@ -4131,9 +4131,10 @@ int skb_gro_receive(struct sk_buff *p, struct sk_buff *skb)
 	} else if (skb->head_frag) {
 		int nr_frags = pinfo->nr_frags;
 		skb_frag_t *frag = pinfo->frags + nr_frags;
-		struct page *page = virt_to_head_page(skb->head); /* Here's the BUG!!! */
 		unsigned int first_size = headlen - offset;
 		unsigned int first_offset;
+
+		struct page *page = virt_to_head_maio_page(skb->head);
 
 		if (nr_frags + 1 + skbinfo->nr_frags > MAX_SKB_FRAGS)
 			goto merge;
@@ -5164,7 +5165,7 @@ bool skb_try_coalesce(struct sk_buff *to, struct sk_buff *from,
 
 		delta = from->truesize - SKB_DATA_ALIGN(sizeof(struct sk_buff));
 
-		page = virt_to_head_page(from->head);
+		page = virt_to_head_maio_page(from->head);
 		offset = from->data - (unsigned char *)page_address(page);
 
 		skb_fill_page_desc(to, to_shinfo->nr_frags,
