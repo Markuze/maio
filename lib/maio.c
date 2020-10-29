@@ -281,7 +281,10 @@ static inline ssize_t maio_add_page(struct file *file, const char __user *buf,
 	}
 
 	trace_printk("%d: %s maio_configured\n", smp_processor_id(), __FUNCTION__);
+
+	init_user_rings();
 	maio_configured = true;
+
 	return size;
 }
 
@@ -293,11 +296,15 @@ static ssize_t maio_proc_write(struct file *file,
 
 static int maio_proc_show(struct seq_file *m, void *v)
 {
-        seq_printf(m, "%llx %ld\n",
-		get_maio_uaddr(virt_to_head_page(global_user_matrix)),
-		hp_cache_size);
 
-	//seq_puts(m, buffer);
+	if (global_user_matrix) {
+		seq_printf(m, "%llx %ld\n",
+			get_maio_uaddr(virt_to_head_page(global_user_matrix)),
+			hp_cache_size);
+	} else {
+		seq_printf(m, "NOT CONFIGURED\n");
+	}
+
         return 0;
 }
 
