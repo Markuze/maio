@@ -19,9 +19,12 @@
 
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 #include <unistd.h>
 #include <sys/mman.h>
 #include <fcntl.h>
+
+#include "user_maio.h"
 
 #define NR_PAGES (1536ULL)
 #define HP_SIZE (1<<21)	//2MB Files
@@ -94,11 +97,17 @@ int main(void)
 	if (proc < 0) {
 		perror("Open failed");
 	} else {
+		struct user_matrix *mt = NULL;
 		int len = snprintf(write_buffer, 64, "%p %llu\n", addr, NR_PAGES);
-		write(proc, write_buffer, len);
-		close(proc);
+		len = write(proc, write_buffer, len);
+		memset(write_buffer, 0, 64);
+		len = read(proc, write_buffer, 64);
+		mt = (void *)atoll(write_buffer);
+		printf("read[%d] %s: %p", len, write_buffer, mt);
 	}
 
+	if (!(proc < 0))
+		close(proc);
 	munmap(addr, LENGTH);
 	close(fd);
 	unlink(FILE_NAME);
