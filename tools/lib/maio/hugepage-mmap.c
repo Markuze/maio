@@ -78,7 +78,7 @@ int main(void)
 
 	addr = mmap(ADDR, LENGTH, PROTECTION, FLAGS, fd, 0);
 	if (addr == MAP_FAILED) {
-		printf("Error Mapping %llu [%llu]\n", LENGHT, NR_PAGES);
+		printf("Error Mapping %llu [%llu]\n", LENGTH, NR_PAGES);
 		perror("mmap");
 		unlink(FILE_NAME);
 		exit(1);
