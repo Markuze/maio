@@ -23,6 +23,7 @@
 #define HUGE_ORDER	9 /* compound_order of 2MB HP */
 #define HUGE_SHIFT	(HUGE_ORDER + PAGE_SHIFT)
 #define HUGE_SIZE	(1 << (HUGE_SHIFT))
+#define HUGE_OFFSET	(HUGE_SIZE -1)
 #define PAGES_IN_HUGE	(1<<HUGE_ORDER)
 
 struct maio_cached_buffer {
@@ -50,6 +51,10 @@ static struct page* umem_pages[1<<HUGE_ORDER];
 static struct proc_dir_entry *maio_dir;
 static struct maio_magz global_maio;
 
+/* User matrix */
+static struct user_matrix *global_user_matrix;
+
+/* HP Cache */
 static LIST_HEAD(hp_cache);
 static unsigned long hp_cache_flags;
 DEFINE_SPINLOCK(hp_cache_lock);
@@ -98,95 +103,10 @@ static inline struct page *maio_get_cached_hp(void)
 	return (buffer) ? virt_to_page(buffer): NULL;
 }
 
-static inline ssize_t maio_add_page(struct file *file, const char __user *buf,
-                                    size_t size, loff_t *_pos)
-{
-	char *kbuff, *cur;
-	u64   base;
-	size_t len;
-	long rc, i;
-
-	if (size <= 1 || size >= PAGE_SIZE)
-	        return -EINVAL;
-
-	kbuff = memdup_user_nul(buf, size);
-	if (IS_ERR(kbuff))
-	        return PTR_ERR(kbuff);
-
-	base	= simple_strtoull(kbuff, &cur, 16);
-	len	= simple_strtol(cur + 1, &cur, 10);
-	pr_err("Got: [%llx: %ld]\n", base, len);
-	kfree(kbuff);
-
-	if (!(mtt = kzalloc(sizeof(struct umem_region_mtt)
-				+ len * sizeof(struct page*), GFP_KERNEL)))
-		return -ENOMEM;
-
-	mtt->start	= base;
-	mtt->end 	= base + (len * HUGE_SIZE) -1;
-	mtt->len	= len;
-	mtt->order	= HUGE_ORDER;
-
-	for (i = 0; i < len; i++) {
-		u64 uaddr = base + (i * HUGE_SIZE);
-		rc = get_user_pages(uaddr, (1 << HUGE_ORDER), FOLL_LONGTERM, &umem_pages[0], NULL);
-		pr_err("[%ld]%llx[%llx:%d] \n", rc, uaddr, (unsigned long long)umem_pages[0],
-							compound_order(umem_pages[0]));
-		/*
-			set_maio_page. K > V.
-			record address. V > K.
-			Set pages into buffers. Magazine.
-
-		*/
-		mtt->pages[i] =	umem_pages[0];
-		if (i != uaddr2idx(mtt, uaddr))
-			pr_err("Please Fix uaddr2idx: %ld != %llx\n", i, uaddr2idx(mtt, uaddr));
-		set_maio_uaddr(umem_pages[0], uaddr);
-		/* Allow for the Allocator to get elements on demand, flexible support for variable sizes */
-		maio_cache_hp(umem_pages[0]);
-		pr_err("Added %llx:%llx (umem %llx)to MAIO\n", uaddr, (u64)umem_pages[0], get_maio_uaddr(umem_pages[0]));
-	}
-
-	trace_printk("%d: %s maio_configured\n", smp_processor_id(), __FUNCTION__);
-	maio_configured = true;
-	return size;
-}
-
-static ssize_t maio_proc_write(struct file *file,
-                const char __user *buffer, size_t count, loff_t *pos)
-{
-        return maio_add_page(file, buffer, count, pos);
-}
-
-static int maio_proc_show(struct seq_file *m, void *v)
-{
-	char *buffer = kzalloc(PAGE_SIZE, GFP_KERNEL);
-
-	show_line;
-        seq_printf(m, "Heya!");
-	memcpy(buffer, "HelloCopy!\0", 12);
-	if (!buffer)
-		return -ENOMEM;
-	show_line;
-
-	seq_puts(m, buffer);
-	show_line;
-        kfree(buffer);
-	show_line;
-        seq_printf(m, "Heya!");
-	show_line;
-        return 0;
-}
-
 static inline int order2idx(size_t order)
 {
 	/* With multiple sizes this will change*/
 	return 0;
-}
-
-static int maio_proc_open(struct inode *inode, struct file *file)
-{
-        return single_open(file, maio_proc_show, PDE_DATA(inode));
 }
 
 static inline void maio_free_elem(void *elem, u16 order)
@@ -275,6 +195,118 @@ struct page *maio_alloc_pages(size_t order)
 	return page;
 }
 EXPORT_SYMBOL(maio_alloc_pages);
+
+static inline void init_user_rings(void)
+{
+	struct page *hp = maio_get_cached_hp();
+	global_user_matrix = (struct user_matrix *)hp;
+	memset(global_user_matrix, 0, HUGE_SIZE);
+
+	pr_err("Set user matrix to %llx\n", (u64)global_user_matrix);
+}
+
+static inline u64 addr2uaddr(void *addr)
+{
+	u64 offset = (u64)addr;
+	offset &=  HUGE_OFFSET;
+
+	return get_maio_uaddr(virt_to_head_page(addr)) + offset;
+}
+
+void maio_post_rx_page(void *addr)
+{
+	struct user_ring *ring;
+
+	if (!global_user_matrix)
+		return;
+
+	ring = &global_user_matrix->ring[smp_processor_id()];
+	if (unlikely(ring->prod + 1 == ring->cons)) {
+		trace_printk("[%d]User to slow. dropping post of %llx:%llx",
+				smp_processor_id(), (u64)addr, addr2uaddr(addr));
+		return;
+	}
+	ring->addr[ring->prod] = addr2uaddr(addr);
+	++ring->prod;
+}
+EXPORT_SYMBOL(maio_post_rx_page);
+
+static inline ssize_t maio_add_page(struct file *file, const char __user *buf,
+                                    size_t size, loff_t *_pos)
+{
+	char *kbuff, *cur;
+	u64   base;
+	size_t len;
+	long rc, i;
+
+	if (size <= 1 || size >= PAGE_SIZE)
+	        return -EINVAL;
+
+	kbuff = memdup_user_nul(buf, size);
+	if (IS_ERR(kbuff))
+	        return PTR_ERR(kbuff);
+
+	base	= simple_strtoull(kbuff, &cur, 16);
+	len	= simple_strtol(cur + 1, &cur, 10);
+	pr_err("Got: [%llx: %ld]\n", base, len);
+	kfree(kbuff);
+
+	if (!(mtt = kzalloc(sizeof(struct umem_region_mtt)
+				+ len * sizeof(struct page*), GFP_KERNEL)))
+		return -ENOMEM;
+
+	mtt->start	= base;
+	mtt->end 	= base + (len * HUGE_SIZE) -1;
+	mtt->len	= len;
+	mtt->order	= HUGE_ORDER;
+
+	for (i = 0; i < len; i++) {
+		u64 uaddr = base + (i * HUGE_SIZE);
+		rc = get_user_pages(uaddr, (1 << HUGE_ORDER), FOLL_LONGTERM, &umem_pages[0], NULL);
+		pr_err("[%ld]%llx[%llx:%d] \n", rc, uaddr, (unsigned long long)umem_pages[0],
+							compound_order(umem_pages[0]));
+		/*
+			set_maio_page. K > V.
+			record address. V > K.
+			Set pages into buffers. Magazine.
+
+		*/
+		mtt->pages[i] =	umem_pages[0];
+		if (i != uaddr2idx(mtt, uaddr))
+			pr_err("Please Fix uaddr2idx: %ld != %llx\n", i, uaddr2idx(mtt, uaddr));
+		set_maio_uaddr(umem_pages[0], uaddr);
+		/* Allow for the Allocator to get elements on demand, flexible support for variable sizes */
+		maio_cache_hp(umem_pages[0]);
+		pr_err("Added %llx:%llx (umem %llx)to MAIO\n", uaddr, (u64)umem_pages[0], get_maio_uaddr(umem_pages[0]));
+	}
+
+	trace_printk("%d: %s maio_configured\n", smp_processor_id(), __FUNCTION__);
+	maio_configured = true;
+	return size;
+}
+
+static ssize_t maio_proc_write(struct file *file,
+                const char __user *buffer, size_t count, loff_t *pos)
+{
+        return maio_add_page(file, buffer, count, pos);
+}
+
+static int maio_proc_show(struct seq_file *m, void *v)
+{
+        seq_printf(m, "%llx %ld\n",
+		get_maio_uaddr(virt_to_head_page(global_user_matrix)),
+		hp_cache_size);
+
+	//seq_puts(m, buffer);
+        return 0;
+}
+
+
+static int maio_proc_open(struct inode *inode, struct file *file)
+{
+        return single_open(file, maio_proc_show, PDE_DATA(inode));
+}
+
 
 static const struct proc_ops maio_proc_ops = {
         .proc_open      = maio_proc_open,
