@@ -90,6 +90,11 @@ static inline void poll_rings(struct user_matrix *mtrx)
 {
 	int pack = 0;
 
+	printf("Checking matrix @ %p\n", mtrx);
+	for (int i = 0; i < 8; i++) {
+		struct user_ring *ring = &mtrx->ring[i];
+		printf("\tChecking ring @ %p\n", ring);
+	}
 retry:
 	for (int i = 0; i < 8; i++) {
 		struct user_ring *ring = &mtrx->ring[i];

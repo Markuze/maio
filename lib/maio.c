@@ -245,6 +245,7 @@ void maio_post_rx_page(void *addr)
 		return;
 	}
 
+	trace_printk("Posting to Ring %d:%llx\n", smp_processor_id(), addr2uaddr(ring));
 	ring->addr[ring->prod & UMAIO_RING_MASK] = addr2uaddr(addr);
 	++ring->prod;
 }
