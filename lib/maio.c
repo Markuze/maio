@@ -249,10 +249,13 @@ void maio_post_rx_page(void *addr)
 				smp_processor_id(), (u64)addr, addr2uaddr(addr));
 		return;
 	}
-
-	trace_printk("Posting to Ring %d:%llx\n", smp_processor_id(), addr2uaddr(ring));
-	ring->addr[ring->prod & UMAIO_RING_MASK] = addr2uaddr(addr);
-	++ring->prod;
+	if (is_maio_page(virt_to_page(addr))) {
+		trace_printk("Posting to Ring %d:%llx: %llx\n", smp_processor_id(), addr2uaddr(ring), addr2uaddr(addr));
+		ring->addr[ring->prod & UMAIO_RING_MASK] = addr2uaddr(addr);
+		++ring->prod;
+	} else {
+		trace_printk("Non MAIO Posting to Ring %d:%llx:%llx\n", smp_processor_id(), addr2uaddr(ring), (u64)addr);
+	}
 }
 EXPORT_SYMBOL(maio_post_rx_page);
 

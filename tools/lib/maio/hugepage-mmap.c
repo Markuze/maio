@@ -78,9 +78,10 @@ static inline int check_ring(struct user_ring *ring)
 	while (ring->cons != ring->prod) {
 		++pack;
 		addr = (void *)ring->addr[ring->cons++ & UMAIO_RING_MASK];
-		snprintf(buffer, 16, "%c:%c:%c:%c:%c:%c", addr[0], addr[1], addr[2], addr[3],addr[4], addr[5]);
-		snprintf(&buffer[7], 16, "%c:%c:%c:%c:%c:%c", addr[6], addr[7], addr[8], addr[9], addr[10], addr[11]);
-		printf("Addr: %p %s::%s::%d\n", addr, buffer, &buffer[7], *((int *)&addr[12]));
+		//snprintf(buffer, 16, "%c:%c:%c:%c:%c:%c", addr[0], addr[1], addr[2], addr[3],addr[4], addr[5]);
+		//snprintf(&buffer[7], 16, "%c:%c:%c:%c:%c:%c", addr[6], addr[7], addr[8], addr[9], addr[10], addr[11]);
+		//printf("Addr: %p %s::%s::%d\n", addr, buffer, &buffer[7], *((int *)&addr[12]));
+		printf("Ring %p: c %llu p %llu:: %llx\n", ring, ring->cons, ring->prod, addr);
 	}
 
 	return pack;
