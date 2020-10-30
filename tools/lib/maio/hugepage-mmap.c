@@ -26,7 +26,8 @@
 
 #include "user_maio.h"
 
-#define NR_PAGES (1536ULL)
+//#define NR_PAGES (1536ULL)
+#define NR_PAGES (256ULL)
 #define HP_SIZE (1<<21)	//2MB Files
 #define FILE_NAME "/media/huge/hugepagefile"
 #define LENGTH (NR_PAGES * HP_SIZE)
@@ -102,8 +103,8 @@ int main(void)
 		len = write(proc, write_buffer, len);
 		memset(write_buffer, 0, 64);
 		len = read(proc, write_buffer, 64);
-		mt = (void *)atoll(write_buffer);
-		printf("read[%d] %s: %p", len, write_buffer, mt);
+		mt = (void *)strtoull(write_buffer, NULL, 16);
+		printf("read[%d] %s: %p\n", len, write_buffer, mt);
 	}
 
 	if (!(proc < 0))

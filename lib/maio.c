@@ -202,10 +202,10 @@ static inline void init_user_rings(void)
 
 	trace_printk("%d: %s page:%llx [cache size=%lu]\n",
 			smp_processor_id(), __FUNCTION__, (u64)hp, hp_cache_size);
-	if (unlikely(!page))
+	if (unlikely(!hp))
 		return;
 
-	assert(compound_order(page) == HUGE_ORDER);
+	assert(compound_order(hp) == HUGE_ORDER);
 
 	global_user_matrix = (struct user_matrix *)page_address(hp);
 	pr_err("Set user matrix to %llx[%llx]\n", (u64)global_user_matrix, (u64)hp);
