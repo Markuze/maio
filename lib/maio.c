@@ -196,6 +196,14 @@ struct page *maio_alloc_pages(size_t order)
 }
 EXPORT_SYMBOL(maio_alloc_pages);
 
+static inline u64 addr2uaddr(void *addr)
+{
+	u64 offset = (u64)addr;
+	offset &=  HUGE_OFFSET;
+
+	return get_maio_uaddr(virt_to_head_page(addr)) + offset;
+}
+
 static inline void init_user_rings(void)
 {
 	struct page *hp = maio_get_cached_hp();
@@ -208,17 +216,10 @@ static inline void init_user_rings(void)
 	assert(compound_order(hp) == HUGE_ORDER);
 
 	global_user_matrix = (struct user_matrix *)page_address(hp);
-	pr_err("Set user matrix to %llx[%llx]\n", (u64)global_user_matrix, (u64)hp);
+	pr_err("Set user matrix to %llx[%llx] - %llx\n",
+		(u64)global_user_matrix, (u64)hp, addr2uaddr(global_user_matrix));
 	memset(global_user_matrix, 0, HUGE_SIZE);
 
-}
-
-static inline u64 addr2uaddr(void *addr)
-{
-	u64 offset = (u64)addr;
-	offset &=  HUGE_OFFSET;
-
-	return get_maio_uaddr(virt_to_head_page(addr)) + offset;
 }
 
 static inline bool ring_full(u64 p, u64 c)
@@ -243,6 +244,7 @@ void maio_post_rx_page(void *addr)
 				smp_processor_id(), (u64)addr, addr2uaddr(addr));
 		return;
 	}
+
 	ring->addr[ring->prod & UMAIO_RING_MASK] = addr2uaddr(addr);
 	++ring->prod;
 }
