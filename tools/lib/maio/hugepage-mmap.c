@@ -68,6 +68,38 @@ static int read_bytes(char *addr)
 	return 0;
 }
 
+
+static inline int check_ring(struct user_ring *ring)
+{
+	int pack = 0;
+	char *addr;
+	char buffer[16] = {0};
+
+	while (ring->cons != ring->prod) {
+		++pack;
+		addr = (void *)ring->addr[ring->cons++ & UMAIO_RING_MASK];
+		snprintf(buffer, 16, "%c:%c:%c:%c:%c:%c", addr[0], addr[1], addr[2], addr[3],addr[4], addr[5]);
+		snprintf(&buffer[7], 16, "%c:%c:%c:%c:%c:%c", addr[6], addr[7], addr[8], addr[9], addr[10], addr[11]);
+		printf("Addr: %p %s::%s::%d\n", addr, buffer, &buffer[7], *((int *)&addr[12]));
+	}
+
+	return pack;
+}
+
+static inline void poll_rings(struct user_matrix *mtrx)
+{
+	int pack = 0;
+
+retry:
+	for (int i = 0; i < 8; i++) {
+		struct user_ring *ring = &mtrx->ring[i];
+		pack += check_ring(ring);
+	}
+	goto retry;
+
+	return;
+}
+
 int main(void)
 {
 	void *addr;
@@ -105,6 +137,8 @@ int main(void)
 		len = read(proc, write_buffer, 64);
 		mt = (void *)strtoull(write_buffer, NULL, 16);
 		printf("read[%d] %s: %p\n", len, write_buffer, mt);
+
+		poll_rings(mt);
 	}
 
 	if (!(proc < 0))
