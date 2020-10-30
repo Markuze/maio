@@ -107,7 +107,7 @@ retry:
 
 int main(void)
 {
-	void *addr;
+	char *addr;
 	int fd, ret, proc;
 	char write_buffer[64];
 
@@ -125,7 +125,7 @@ int main(void)
 		exit(1);
 	}
 
-	printf("Returned address is %p\n", addr);
+	printf("Returned address is %p > [%s]\n", addr, (char *)&addr[16]);
 	check_bytes(addr);
 	write_bytes(addr);
 	ret = read_bytes(addr);
@@ -139,6 +139,7 @@ int main(void)
 		int len = snprintf(write_buffer, 64, "%p %llu\n", addr, NR_PAGES);
 		len = write(proc, write_buffer, len);
 		memset(write_buffer, 0, 64);
+		printf("rechecking returned %p > [%s]\n", addr, (char *)&addr[16]);
 		len = read(proc, write_buffer, 64);
 		mt = (void *)strtoull(write_buffer, NULL, 16);
 		printf("read[%d] %s: %p\n", len, write_buffer, mt);

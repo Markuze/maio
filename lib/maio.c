@@ -53,6 +53,7 @@ static struct maio_magz global_maio;
 
 /* User matrix */
 static struct user_matrix *global_user_matrix;
+static u64 maio_rx_post_cnt;
 
 /* HP Cache */
 static LIST_HEAD(hp_cache);
@@ -76,9 +77,18 @@ static inline u64 uaddr2idx(const struct umem_region_mtt *mtt, u64 uaddr)
 	return idx >> (HUGE_SHIFT);
 }
 
+static inline u64 addr2uaddr(void *addr)
+{
+	u64 offset = (u64)addr;
+	offset &=  HUGE_OFFSET;
+
+	return get_maio_uaddr(virt_to_head_page(addr)) + offset;
+}
+
 static inline void maio_cache_hp(struct page *page)
 {
 	struct maio_cached_buffer *buffer = page_address(page);
+	snprintf((char *)&buffer[16], 64, "heya!! %llx:%llx\n", (u64)buffer, addr2uaddr(buffer));
 	spin_lock_irqsave(&hp_cache_lock, hp_cache_flags);
 	list_add(&buffer->list, &hp_cache);
 	++hp_cache_size;
@@ -196,14 +206,6 @@ struct page *maio_alloc_pages(size_t order)
 }
 EXPORT_SYMBOL(maio_alloc_pages);
 
-static inline u64 addr2uaddr(void *addr)
-{
-	u64 offset = (u64)addr;
-	offset &=  HUGE_OFFSET;
-
-	return get_maio_uaddr(virt_to_head_page(addr)) + offset;
-}
-
 static inline void init_user_rings(void)
 {
 	struct page *hp = maio_get_cached_hp();
@@ -231,12 +233,11 @@ void maio_post_rx_page(void *addr)
 {
 	struct user_ring *ring;
 
-	if (!maio_configured)
-		return;
-
-	if (!global_user_matrix)
+	++maio_rx_post_cnt;
+	if (!global_user_matrix) {
 		pr_err("global matrix not configured!!!");
 		return;
+	}
 
 	ring = &global_user_matrix->ring[smp_processor_id()];
 	if (unlikely(ring_full(ring->prod, ring->cons))) {
@@ -318,9 +319,9 @@ static int maio_proc_show(struct seq_file *m, void *v)
 {
 
 	if (global_user_matrix) {
-		seq_printf(m, "%llx %ld\n",
+		seq_printf(m, "%llx %ld (%llx)\n",
 			get_maio_uaddr(virt_to_head_page(global_user_matrix)),
-			hp_cache_size);
+			hp_cache_size, maio_rx_post_cnt);
 	} else {
 		seq_printf(m, "NOT CONFIGURED\n");
 	}
