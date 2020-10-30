@@ -199,10 +199,10 @@ EXPORT_SYMBOL(maio_alloc_pages);
 static inline void init_user_rings(void)
 {
 	struct page *hp = maio_get_cached_hp();
-	global_user_matrix = (struct user_matrix *)hp;
+	global_user_matrix = (struct user_matrix *)virt_to_head_page(hp);
+	pr_err("Set user matrix to %llx[%llx]\n", (u64)global_user_matrix, (u64)hp);
 	memset(global_user_matrix, 0, HUGE_SIZE);
 
-	pr_err("Set user matrix to %llx\n", (u64)global_user_matrix);
 }
 
 static inline u64 addr2uaddr(void *addr)
