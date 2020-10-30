@@ -139,7 +139,7 @@ int main(void)
 		int len = snprintf(write_buffer, 64, "%p %llu\n", addr, NR_PAGES);
 		len = write(proc, write_buffer, len);
 		memset(write_buffer, 0, 64);
-		printf("rechecking returned %p > [%s]\n", addr, (char *)&addr[16]);
+		printf("rechecking returned %p > [%s]\n", &addr[16], (char *)&addr[16]);
 		len = read(proc, write_buffer, 64);
 		mt = (void *)strtoull(write_buffer, NULL, 16);
 		printf("read[%d] %s: %p\n", len, write_buffer, mt);

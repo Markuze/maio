@@ -88,7 +88,10 @@ static inline u64 addr2uaddr(void *addr)
 static inline void maio_cache_hp(struct page *page)
 {
 	struct maio_cached_buffer *buffer = page_address(page);
-	snprintf((char *)&buffer[16], 64, "heya!! %llx:%llx\n", (u64)buffer, addr2uaddr(buffer));
+
+	/* The text is not where you expect: use char* buffer to use 16.... *facepalm* */
+	snprintf((char *)&buffer[1], 64, "heya!! %llx:%llx\n\0", (u64)buffer, addr2uaddr(buffer));
+	trace_printk("Written text to %llx:%llx\n", (u64)&buffer[1], addr2uaddr(buffer));
 	spin_lock_irqsave(&hp_cache_lock, hp_cache_flags);
 	list_add(&buffer->list, &hp_cache);
 	++hp_cache_size;
@@ -236,6 +239,7 @@ void maio_post_rx_page(void *addr)
 	++maio_rx_post_cnt;
 	if (!global_user_matrix) {
 		pr_err("global matrix not configured!!!");
+		trace_printk("global matrix not configured!!!");
 		return;
 	}
 
