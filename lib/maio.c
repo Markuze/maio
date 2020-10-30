@@ -245,7 +245,7 @@ void maio_post_rx_page(void *addr)
 
 	ring = &global_user_matrix->ring[smp_processor_id()];
 	if (unlikely(ring_full(ring->prod, ring->cons))) {
-		trace_printk("[%d]User to slow. dropping post of %llx:%llx",
+		trace_printk("[%d]User to slow. dropping post of %llx:%llx\n",
 				smp_processor_id(), (u64)addr, addr2uaddr(addr));
 		return;
 	}
