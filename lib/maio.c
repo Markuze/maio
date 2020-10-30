@@ -199,7 +199,15 @@ EXPORT_SYMBOL(maio_alloc_pages);
 static inline void init_user_rings(void)
 {
 	struct page *hp = maio_get_cached_hp();
-	global_user_matrix = (struct user_matrix *)virt_to_head_page(hp);
+
+	trace_printk("%d: %s page:%llx [cache size=%lu]\n",
+			smp_processor_id(), __FUNCTION__, (u64)hp, hp_cache_size);
+	if (unlikely(!page))
+		return;
+
+	assert(compound_order(page) == HUGE_ORDER);
+
+	global_user_matrix = (struct user_matrix *)page_address(hp);
 	pr_err("Set user matrix to %llx[%llx]\n", (u64)global_user_matrix, (u64)hp);
 	memset(global_user_matrix, 0, HUGE_SIZE);
 
