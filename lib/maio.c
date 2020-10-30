@@ -221,20 +221,29 @@ static inline u64 addr2uaddr(void *addr)
 	return get_maio_uaddr(virt_to_head_page(addr)) + offset;
 }
 
+static inline bool ring_full(u64 p, u64 c)
+{
+	return (((p + 1) & UMAIO_RING_MASK) == (c & UMAIO_RING_MASK));
+}
+
 void maio_post_rx_page(void *addr)
 {
 	struct user_ring *ring;
 
+	if (!maio_configured)
+		return;
+
 	if (!global_user_matrix)
+		pr_err("global matrix not configured!!!");
 		return;
 
 	ring = &global_user_matrix->ring[smp_processor_id()];
-	if (unlikely(ring->prod + 1 == ring->cons)) {
+	if (unlikely(ring_full(ring->prod, ring->cons))) {
 		trace_printk("[%d]User to slow. dropping post of %llx:%llx",
 				smp_processor_id(), (u64)addr, addr2uaddr(addr));
 		return;
 	}
-	ring->addr[ring->prod] = addr2uaddr(addr);
+	ring->addr[ring->prod & UMAIO_RING_MASK] = addr2uaddr(addr);
 	++ring->prod;
 }
 EXPORT_SYMBOL(maio_post_rx_page);

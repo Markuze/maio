@@ -2,6 +2,7 @@
 #define  __MAIO__H
 
 #define UMAIO_RING_SZ	512
+#define UMAIO_RING_MASK	(UMAIO_RING_SZ -1)
 
 extern bool maio_configured;
 
