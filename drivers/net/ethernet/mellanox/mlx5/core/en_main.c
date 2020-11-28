@@ -2067,6 +2067,7 @@ static void mlx5e_build_rq_frags_info(struct mlx5_core_dev *mdev,
 	if (mlx5e_rx_is_linear_skb(params, xsk)) {
 		int frag_stride;
 
+		/* TODO: Make sure Defualt 2K is used...*/
 		frag_stride = mlx5e_rx_get_linear_frag_sz(params, xsk);
 		frag_stride = roundup_pow_of_two(frag_stride);
 

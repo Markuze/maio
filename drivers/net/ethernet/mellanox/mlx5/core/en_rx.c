@@ -1177,6 +1177,7 @@ mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq, struct mlx5_cqe64 *cqe,
 	prefetchw(va); /* xdp_frame data area */
 	prefetch(data);
 
+	/* Capture RX here... */
 	mlx5e_fill_xdp_buff(rq, va, rx_headroom, cqe_bcnt, &xdp);
 	if (mlx5e_xdp_handle(rq, di, &cqe_bcnt, &xdp))
 		return NULL; /* page/packet was consumed by XDP */
