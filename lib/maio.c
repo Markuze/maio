@@ -51,8 +51,9 @@ static struct page* umem_pages[1<<HUGE_ORDER];
 static struct proc_dir_entry *maio_dir;
 static struct maio_magz global_maio;
 
-/* User matrix */
-static struct user_matrix *global_user_matrix;
+/* User matrix : No longer static as the threads should be in a module */
+struct user_matrix *global_maio_matrix;
+EXPORT_SYMBOL(global_maio_matrix);
 static u64 maio_rx_post_cnt;
 
 /* HP Cache */
@@ -85,7 +86,7 @@ static inline void *uaddr2addr(const struct umem_region_mtt *mtt, u64 addr)
 
 	if (i < 0)
 		return NULL;
-	return page_to_virt(mtt->pages[i]) + offset;
+	return page_address(mtt->pages[i]) + offset;
 }
 
 static inline u64 addr2uaddr(void *addr)
@@ -231,10 +232,10 @@ static inline void init_user_rings_kmem(void)
 
 	assert(compound_order(hp) == HUGE_ORDER);
 
-	global_user_matrix = (struct user_matrix *)page_address(hp);
+	global_maio_matrix = (struct user_matrix *)page_address(hp);
 	pr_err("Set user matrix to %llx[%llx] - %llx\n",
-		(u64)global_user_matrix, (u64)hp, addr2uaddr(global_user_matrix));
-	memset(global_user_matrix, 0, HUGE_SIZE);
+		(u64)global_maio_matrix, (u64)hp, addr2uaddr(global_maio_matrix));
+	memset(global_maio_matrix, 0, HUGE_SIZE);
 
 }
 
@@ -248,13 +249,13 @@ void maio_post_rx_page(void *addr)
 	struct user_ring *ring;
 
 	++maio_rx_post_cnt;
-	if (!global_user_matrix) {
+	if (!global_maio_matrix) {
 		pr_err("global matrix not configured!!!");
 		trace_printk("global matrix not configured!!!");
 		return;
 	}
 
-	ring = &global_user_matrix->ring[smp_processor_id()];
+	ring = &global_maio_matrix->ring[smp_processor_id()];
 	if (unlikely(ring_full(ring->prod, ring->cons))) {
 		trace_printk("[%d]User to slow. dropping post of %llx:%llx\n",
 				smp_processor_id(), (u64)addr, addr2uaddr(addr));
@@ -274,8 +275,10 @@ static inline ssize_t init_user_rings(struct file *file, const char __user *buf,
                                     size_t size, loff_t *_pos)
 {
 	char	*kbuff, *cur;
-	u64	base;
 	void 	*kbase;
+	size_t 	len;
+	long 	rc;
+	u64	base;
 
 	if (size <= 1 || size >= PAGE_SIZE)
 	        return -EINVAL;
@@ -285,19 +288,23 @@ static inline ssize_t init_user_rings(struct file *file, const char __user *buf,
 	        return PTR_ERR(kbuff);
 
 	base = simple_strtoull(kbuff, &cur, 16);
-
+	len	= simple_strtol(cur + 1, &cur, 10);
+/*
 	kbase = uaddr2addr(mtt, base);
 	trace_printk("%d: %s base:%llx [kbase=%llx]\n",
 			smp_processor_id(), __FUNCTION__, base, (u64)kbase);
 
 	if (unlikely( ! kbase ))
-	/* Actualy consider mapping/get_page on your own */
+	// Actualy consider mapping/get_page on your own
 		return -EINVAL;
+*/
 
-
-	global_user_matrix = (struct user_matrix *)kbase;
-	maio_configured = true;
-	pr_err("Set user matrix to %llx and MAIO_CONFIGURED \n", (u64)global_user_matrix);
+	rc = get_user_pages(base, (1 << HUGE_ORDER), FOLL_LONGTERM, &umem_pages[0], NULL);
+	kbase = page_to_virt(umem_pages[0]) + (base & (PAGE_SIZE -1));
+	pr_err("MTRX is set to %llx[%llx] user %llx order [%d] rc = %ld\n", (u64)kbase, (u64)page_to_virt(umem_pages[0]), base, compound_order(umem_pages[0]), rc);
+	global_maio_matrix = (struct user_matrix *)kbase;
+//	maio_configured = true;
+	pr_err("Set user matrix to %llx [%ld]\n", (u64)global_maio_matrix, len);
 
 	return size;
 }
@@ -376,9 +383,9 @@ static ssize_t maio_proc_write(struct file *file,
 static int maio_proc_show(struct seq_file *m, void *v)
 {
 
-	if (global_user_matrix) {
+	if (global_maio_matrix) {
 		seq_printf(m, "%llx %ld (%llx)\n",
-			get_maio_uaddr(virt_to_head_page(global_user_matrix)),
+			get_maio_uaddr(virt_to_head_page(global_maio_matrix)),
 			hp_cache_size, maio_rx_post_cnt);
 	} else {
 		seq_printf(m, "NOT CONFIGURED\n");
