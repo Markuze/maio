@@ -43,7 +43,7 @@ struct maio_magz {
 	u32			num_pages;
 };
 /* GLOBAL MAIO FLAG*/
-bool maio_configured;
+volatile bool maio_configured;
 EXPORT_SYMBOL(maio_configured);
 /* get_user_pages */
 static struct page* umem_pages[1<<HUGE_ORDER];
@@ -271,6 +271,28 @@ void maio_post_rx_page(void *addr)
 }
 EXPORT_SYMBOL(maio_post_rx_page);
 
+static inline ssize_t maio_enable(struct file *file, const char __user *buf,
+                                    size_t size, loff_t *_pos)
+{	char	*kbuff, *cur;
+	size_t 	val;
+
+	if (size <= 1 || size >= PAGE_SIZE)
+	        return -EINVAL;
+
+	kbuff = memdup_user_nul(buf, size);
+	if (is_err(kbuff))
+	        return ptr_err(kbuff);
+
+	val 	= simple_strtoull(kbuff, &cur, 10);
+	pr_err("Got: [%ld] was %d\n", val, maio_configured);
+	if (val == 0 || val == 1)
+		maio_configured = val;
+	else
+		return -EINVAL;
+
+	return size;
+}
+
 static inline ssize_t init_user_rings(struct file *file, const char __user *buf,
                                     size_t size, loff_t *_pos)
 {
@@ -284,34 +306,28 @@ static inline ssize_t init_user_rings(struct file *file, const char __user *buf,
 	        return -EINVAL;
 
 	kbuff = memdup_user_nul(buf, size);
-	if (IS_ERR(kbuff))
-	        return PTR_ERR(kbuff);
+	if (is_err(kbuff))
+	        return ptr_err(kbuff);
 
-	base = simple_strtoull(kbuff, &cur, 16);
+	base 	= simple_strtoull(kbuff, &cur, 16);
 	len	= simple_strtol(cur + 1, &cur, 10);
-/*
-	kbase = uaddr2addr(mtt, base);
-	trace_printk("%d: %s base:%llx [kbase=%llx]\n",
-			smp_processor_id(), __FUNCTION__, base, (u64)kbase);
+	pr_err("Got: [0x%llx: %ld]\n", base, len);
 
-	if (unlikely( ! kbase ))
-	// Actualy consider mapping/get_page on your own
-		return -EINVAL;
-*/
-
-	rc = get_user_pages(base, (1 << HUGE_ORDER), FOLL_LONGTERM, &umem_pages[0], NULL);
-	kbase = page_to_virt(umem_pages[0]) + (base & (PAGE_SIZE -1));
-	pr_err("MTRX is set to %llx[%llx] user %llx order [%d] rc = %ld\n", (u64)kbase, (u64)page_to_virt(umem_pages[0]), base, compound_order(umem_pages[0]), rc);
+	if ((rc = get_user_pages(base, (len >> PAGE_SHIFT), FOLL_LONGTERM, &umem_pages[0], NULL)) < 0) {
+		pr_err("ERROR on get_user_pages %ld\n", rc);
+		return rc;
+	}
+	kbase = page_address(umem_pages[0]) + (base & (PAGE_SIZE -1));
+	pr_err("MTRX is set to %llx[%llx] user %llx order [%d] rc = %ld\n", (u64)kbase, (u64)page_address(umem_pages[0]), base, compound_order(umem_pages[0]), rc);
 	global_maio_matrix = (struct user_matrix *)kbase;
-//	maio_configured = true;
 	pr_err("Set user matrix to %llx [%ld]\n", (u64)global_maio_matrix, len);
 
 	return size;
 }
 
 
-static inline ssize_t maio_add_page(struct file *file, const char __user *buf,
-                                    size_t size, loff_t *_pos)
+static inline ssize_t maio_map_page(struct file *file, const char __user *buf,
+                                    size_t size, loff_t *_pos, bool cache)
 {
 	char *kbuff, *cur;
 	u64   base;
@@ -355,11 +371,12 @@ static inline ssize_t maio_add_page(struct file *file, const char __user *buf,
 			pr_err("Please Fix uaddr2idx: %ld != %llx\n", i, uaddr2idx(mtt, uaddr));
 		set_maio_uaddr(umem_pages[0], uaddr);
 		/* Allow for the Allocator to get elements on demand, flexible support for variable sizes */
-		maio_cache_hp(umem_pages[0]);
+		if (cache)
+			maio_cache_hp(umem_pages[0]);
 		pr_err("Added %llx:%llx (umem %llx)to MAIO\n", uaddr, (u64)umem_pages[0], get_maio_uaddr(umem_pages[0]));
 	}
 
-	trace_printk("%d: %s maio_configured\n", smp_processor_id(), __FUNCTION__);
+	trace_printk("%d: %s maio_maped\n", smp_processor_id(), __FUNCTION__);
 
 /*
 	init_user_rings();
@@ -374,13 +391,31 @@ static ssize_t maio_mtrx_write(struct file *file,
         return init_user_rings(file, buffer, count, pos);
 }
 
-static ssize_t maio_proc_write(struct file *file,
+static ssize_t maio_pages_write(struct file *file,
                 const char __user *buffer, size_t count, loff_t *pos)
 {
-        return maio_add_page(file, buffer, count, pos);
+        return maio_map_page(file, buffer, count, pos, true);
 }
 
-static int maio_proc_show(struct seq_file *m, void *v)
+static ssize_t maio_map_write(struct file *file,
+                const char __user *buffer, size_t count, loff_t *pos)
+{
+        return maio_map_page(file, buffer, count, pos, false);
+}
+
+static ssize_t maio_enable_write(struct file *file,
+                const char __user *buffer, size_t count, loff_t *pos)
+{
+        return maio_enable(file, buffer, count, pos);
+}
+
+static int maio_enable_show(struct seq_file *m, void *v)
+{
+	seq_printf(m, "%d\n", maio_configured ? 1 : 0);
+        return 0;
+}
+
+static int maio_map_show(struct seq_file *m, void *v)
 {
 
 	if (global_maio_matrix) {
@@ -394,33 +429,55 @@ static int maio_proc_show(struct seq_file *m, void *v)
         return 0;
 }
 
-
-static int maio_proc_open(struct inode *inode, struct file *file)
+static int maio_enable_open(struct inode *inode, struct file *file)
 {
-        return single_open(file, maio_proc_show, PDE_DATA(inode));
+        return single_open(file, maio_enable_show, PDE_DATA(inode));
+}
+
+static int maio_map_open(struct inode *inode, struct file *file)
+{
+        return single_open(file, maio_map_show, PDE_DATA(inode));
 }
 
 static const struct proc_ops maio_mtrx_ops = {
-        .proc_open      = maio_proc_open,
+        .proc_open      = maio_map_open,
         .proc_read      = seq_read,
         .proc_lseek     = seq_lseek,
         .proc_release   = single_release,
         .proc_write     = maio_mtrx_write,
 };
 
-static const struct proc_ops maio_map_ops = {
-        .proc_open      = maio_proc_open, /* TODO: Change to func that pirnts the mapped user pages */
+static const struct proc_ops maio_page_ops = {
+        .proc_open      = maio_map_open, /* TODO: Change to func that pirnts the mapped user pages */
         .proc_read      = seq_read,
         .proc_lseek     = seq_lseek,
         .proc_release   = single_release,
-        .proc_write     = maio_proc_write,
+        .proc_write     = maio_pages_write,
+};
+
+static const struct proc_ops maio_map_ops = {
+        .proc_open      = maio_map_open, /* TODO: Change to func that pirnts the mapped user pages */
+        .proc_read      = seq_read,
+        .proc_lseek     = seq_lseek,
+        .proc_release   = single_release,
+        .proc_write     = maio_map_write,
+};
+
+static const struct proc_ops maio_enable_ops = {
+        .proc_open      = maio_enable_open,
+        .proc_read      = seq_read,
+        .proc_lseek     = seq_lseek,
+        .proc_release   = single_release,
+        .proc_write     = maio_enable_write,
 };
 
 static inline void proc_init(void)
 {
 	maio_dir = proc_mkdir_mode("maio", 00555, NULL);
-        proc_create_data("pages", 00666, maio_dir, &maio_map_ops, NULL);
+        proc_create_data("map", 00666, maio_dir, &maio_map_ops, NULL);
         proc_create_data("mtrx", 00666, maio_dir, &maio_mtrx_ops, NULL);
+        proc_create_data("pages", 00666, maio_dir, &maio_page_ops, NULL);
+        proc_create_data("enable", 00666, maio_dir, &maio_enable_ops, NULL);
 }
 
 static __init int maio_init(void)

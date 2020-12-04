@@ -4,7 +4,7 @@ HUGE_PATH=/'mnt/huge'
 echo "setup hugepages"
 
 sudo sh -c "echo 2048 > /proc/sys/vm/nr_hugepages"
-sudo mkdir -p $HUGE_PATH
+mkdir -p $HUGE_PATH
 sudo mount -t hugetlbfs none $HUGE_PATH
 
 #echo "gcc -Wall hugepage-mmap.c -o hugepage-mmap"
