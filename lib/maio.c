@@ -284,7 +284,7 @@ static inline ssize_t maio_enable(struct file *file, const char __user *buf,
 	        return PTR_ERR(kbuff);
 
 	val 	= simple_strtoull(kbuff, &cur, 10);
-	pr_err("Got: [%ld] was %d\n", val, maio_configured);
+	pr_err("%s: Got: [%ld] was %d\n", __FUNCTION__, val, maio_configured);
 	if (val == 0 || val == 1)
 		maio_configured = val;
 	else
@@ -299,7 +299,7 @@ static inline ssize_t init_user_rings(struct file *file, const char __user *buf,
 	char	*kbuff, *cur;
 	void 	*kbase;
 	size_t 	len;
-	long 	rc;
+	long 	rc = 0;
 	u64	base;
 
 	if (size <= 1 || size >= PAGE_SIZE)
@@ -311,14 +311,18 @@ static inline ssize_t init_user_rings(struct file *file, const char __user *buf,
 
 	base 	= simple_strtoull(kbuff, &cur, 16);
 	len	= simple_strtol(cur + 1, &cur, 10);
-	pr_err("Got: [0x%llx: %ld]\n", base, len);
+	pr_err("%s: Got: [0x%llx: %ld]\n", __FUNCTION__, base, len);
 
-	if ((rc = get_user_pages(base, (len >> PAGE_SHIFT), FOLL_LONGTERM, &umem_pages[0], NULL)) < 0) {
-		pr_err("ERROR on get_user_pages %ld\n", rc);
-		return rc;
+	kbase = uaddr2addr(mtt, base);
+	if (!kbase) {
+		if ((rc = get_user_pages(base, (len >> PAGE_SHIFT), FOLL_LONGTERM, &umem_pages[0], NULL)) < 0) {
+			pr_err("ERROR on get_user_pages %ld\n", rc);
+			return rc;
+		}
+		kbase = page_address(umem_pages[0]) + (base & (PAGE_SIZE -1));
 	}
-	kbase = page_address(umem_pages[0]) + (base & (PAGE_SIZE -1));
-	pr_err("MTRX is set to %llx[%llx] user %llx order [%d] rc = %ld\n", (u64)kbase, (u64)page_address(umem_pages[0]), base, compound_order(umem_pages[0]), rc);
+	pr_err("MTRX is set to %llx[%llx] user %llx order [%d] rc = %ld\n", (u64)kbase, (u64)page_address(umem_pages[0]),
+			base, compound_order(virt_to_head_page(kbase)), rc);
 	global_maio_matrix = (struct user_matrix *)kbase;
 	pr_err("Set user matrix to %llx [%ld]\n", (u64)global_maio_matrix, len);
 
@@ -347,7 +351,7 @@ static inline ssize_t maio_map_page(struct file *file, const char __user *buf,
 	kfree(kbuff);
 
 	if (!(mtt = kzalloc(sizeof(struct umem_region_mtt)
-				+ len * sizeof(struct page*), GFP_KERNEL))) //TODO: len is quite large - check assumption.
+				+ len * sizeof(struct page*), GFP_KERNEL)))
 		return -ENOMEM;
 
 	mtt->start	= base;
@@ -359,7 +363,7 @@ static inline ssize_t maio_map_page(struct file *file, const char __user *buf,
 		u64 uaddr = base + (i * HUGE_SIZE);
 		rc = get_user_pages(uaddr, (1 << HUGE_ORDER), FOLL_LONGTERM, &umem_pages[0], NULL);
 		pr_err("[%ld]%llx[%llx:%d] \n", rc, uaddr, (unsigned long long)umem_pages[0],
-							compound_order(umem_pages[0]));
+							compound_order(compound_head(umem_pages[0])));
 		/*
 			set_maio_page. K > V.
 			record address. V > K.
