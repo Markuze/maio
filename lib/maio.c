@@ -280,8 +280,8 @@ static inline ssize_t maio_enable(struct file *file, const char __user *buf,
 	        return -EINVAL;
 
 	kbuff = memdup_user_nul(buf, size);
-	if (is_err(kbuff))
-	        return ptr_err(kbuff);
+	if (IS_ERR(kbuff))
+	        return PTR_ERR(kbuff);
 
 	val 	= simple_strtoull(kbuff, &cur, 10);
 	pr_err("Got: [%ld] was %d\n", val, maio_configured);
@@ -306,8 +306,8 @@ static inline ssize_t init_user_rings(struct file *file, const char __user *buf,
 	        return -EINVAL;
 
 	kbuff = memdup_user_nul(buf, size);
-	if (is_err(kbuff))
-	        return ptr_err(kbuff);
+	if (IS_ERR(kbuff))
+	        return PTR_ERR(kbuff);
 
 	base 	= simple_strtoull(kbuff, &cur, 16);
 	len	= simple_strtol(cur + 1, &cur, 10);
@@ -347,7 +347,7 @@ static inline ssize_t maio_map_page(struct file *file, const char __user *buf,
 	kfree(kbuff);
 
 	if (!(mtt = kzalloc(sizeof(struct umem_region_mtt)
-				+ len * sizeof(struct page*), GFP_KERNEL)))
+				+ len * sizeof(struct page*), GFP_KERNEL))) //TODO: len is quite large - check assumption.
 		return -ENOMEM;
 
 	mtt->start	= base;

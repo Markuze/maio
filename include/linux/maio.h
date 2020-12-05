@@ -4,7 +4,7 @@
 #define UMAIO_RING_SZ	512
 #define UMAIO_RING_MASK	(UMAIO_RING_SZ -1)
 
-extern bool maio_configured;
+extern volatile bool maio_configured;
 extern struct user_matrix *global_maio_matrix;
 
 struct user_ring {

@@ -26,13 +26,6 @@
 
 #include "user_maio.h"
 
-//#define NR_PAGES (1536ULL)
-#define NR_PAGES (256ULL)
-#define HP_SIZE (1<<21)	//2MB Files
-#define FILE_NAME "/media/huge/hugepagefile"
-#define LENGTH (NR_PAGES * HP_SIZE)
-#define PROTECTION (PROT_READ | PROT_WRITE)
-
 /* Only ia64 requires this */
 #ifdef __ia64__
 #define ADDR (void *)(0x8000000000000000UL)
@@ -69,6 +62,7 @@ static int read_bytes(char *addr)
 }
 
 
+/*
 static inline int check_ring(struct user_ring *ring)
 {
 	int pack = 0;
@@ -105,6 +99,7 @@ retry:
 
 	return;
 }
+*/
 
 int main(void)
 {
@@ -145,7 +140,7 @@ int main(void)
 		mt = (void *)strtoull(write_buffer, NULL, 16);
 		printf("read[%d] %s: %p\n", len, write_buffer, mt);
 
-		poll_rings(mt);
+		//poll_rings(mt);
 	}
 
 	if (!(proc < 0))
