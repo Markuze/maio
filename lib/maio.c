@@ -329,6 +329,26 @@ static inline ssize_t init_user_rings(struct file *file, const char __user *buf,
 	return size;
 }
 
+static inline ssize_t maio_add_pages_0(struct file *file, const char __user *buf,
+					    size_t size, loff_t *_pos, bool cache)
+{
+	char *kbuff, *cur;
+	u64   base;
+	size_t len;
+	long rc, i;
+
+	if (size <= 1 )//|| size >= PAGE_SIZE)
+	        return -EINVAL;
+
+	kbuff = memdup_user_nul(buf, size);
+	if (IS_ERR(kbuff))
+	        return PTR_ERR(kbuff);
+
+	base	= simple_strtoull(kbuff, &cur, 16);
+	len	= simple_strtol(cur + 1, &cur, 10);
+	pr_err("Got: [%llx: %ld]\n", base, len);
+	kfree(kbuff);
+}
 
 static inline ssize_t maio_map_page(struct file *file, const char __user *buf,
                                     size_t size, loff_t *_pos, bool cache)
@@ -395,6 +415,12 @@ static ssize_t maio_mtrx_write(struct file *file,
         return init_user_rings(file, buffer, count, pos);
 }
 
+static ssize_t maio_pages_0_write(struct file *file,
+				const char __user *buffer, size_t count, loff_t *pos)
+{
+        return maio_add_pages_0(file, buffer, count, pos);
+}
+
 static ssize_t maio_pages_write(struct file *file,
                 const char __user *buffer, size_t count, loff_t *pos)
 {
@@ -451,6 +477,14 @@ static const struct proc_ops maio_mtrx_ops = {
         .proc_write     = maio_mtrx_write,
 };
 
+static const struct proc_ops maio_page_0_ops = {
+        .proc_open      = maio_map_open, /* TODO: Change to func that pirnts the mapped user pages */
+        .proc_read      = seq_read,
+        .proc_lseek     = seq_lseek,
+        .proc_release   = single_release,
+        .proc_write     = maio_pages_0_write,
+};
+
 static const struct proc_ops maio_page_ops = {
         .proc_open      = maio_map_open, /* TODO: Change to func that pirnts the mapped user pages */
         .proc_read      = seq_read,
@@ -478,10 +512,11 @@ static const struct proc_ops maio_enable_ops = {
 static inline void proc_init(void)
 {
 	maio_dir = proc_mkdir_mode("maio", 00555, NULL);
-        proc_create_data("map", 00666, maio_dir, &maio_map_ops, NULL);
-        proc_create_data("mtrx", 00666, maio_dir, &maio_mtrx_ops, NULL);
-        proc_create_data("pages", 00666, maio_dir, &maio_page_ops, NULL);
-        proc_create_data("enable", 00666, maio_dir, &maio_enable_ops, NULL);
+	proc_create_data("map", 00666, maio_dir, &maio_map_ops, NULL);
+	proc_create_data("mtrx", 00666, maio_dir, &maio_mtrx_ops, NULL);
+	proc_create_data("pages", 00666, maio_dir, &maio_page_ops, NULL);
+	proc_create_data("pages_0", 00666, maio_dir, &maio_page_0_ops, NULL);
+	proc_create_data("enable", 00666, maio_dir, &maio_enable_ops, NULL);
 }
 
 static __init int maio_init(void)
