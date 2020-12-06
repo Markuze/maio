@@ -17,6 +17,15 @@ struct user_matrix {
 	struct user_ring ring[0];
 };
 
+struct meta_pages_0 {
+	u16 nr_pages;
+	u16 stride;
+	u16 headroom;
+	u16 flags;
+	u64 bufs[UMAIO_RING_SZ];
+};
+
+u16 maio_get_page_headroom(struct page *page);
 void maio_post_rx_page(void *addr);
 void maio_frag_free(void *addr);
 void maio_page_free(struct page *page);

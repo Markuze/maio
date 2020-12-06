@@ -266,10 +266,12 @@ static inline int mlx5e_page_alloc_pool(struct mlx5e_rq *rq,
 	if (mlx5e_rx_cache_get(rq, dma_info))
 		return 0;
 */
-	if (maio_configured)
+	if (likely(maio_configured)) {
 		dma_info->page = maio_alloc_page();
-	else
+		rq->buff.headroom = maio_get_page_headroom(dma_info->page);
+	} else {
 		dma_info->page = page_pool_dev_alloc_pages(rq->page_pool);
+	}
 	if (unlikely(!dma_info->page))
 		return -ENOMEM;
 /*
@@ -383,6 +385,7 @@ static int mlx5e_alloc_rx_wqe(struct mlx5e_rq *rq, struct mlx5e_rx_wqe_cyc *wqe,
 {
 	struct mlx5e_wqe_frag_info *frag = get_frag(rq, ix);
 	int err;
+	static u64 headroom;
 	int i;
 
 	for (i = 0; i < rq->wqe.info.num_frags; i++, frag++) {
@@ -392,7 +395,8 @@ static int mlx5e_alloc_rx_wqe(struct mlx5e_rq *rq, struct mlx5e_rx_wqe_cyc *wqe,
 
 		wqe->data[i].addr = cpu_to_be64(frag->di->addr +
 						frag->offset + rq->buff.headroom);
-		trace_printk("serendip: offset %d headroom %d\n", frag->offset, rq->buff.headroom);
+		if (unlikely(headroom != rq->buff.headroom))
+			trace_printk("serendip: offset %d headroom %d\n", frag->offset, rq->buff.headroom);
 	}
 
 	return 0;

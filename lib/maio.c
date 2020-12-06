@@ -56,6 +56,7 @@ struct user_matrix *global_maio_matrix;
 EXPORT_SYMBOL(global_maio_matrix);
 static u64 maio_rx_post_cnt;
 
+static u16 maio_headroom;
 /* HP Cache */
 static LIST_HEAD(hp_cache);
 static unsigned long hp_cache_flags;
@@ -197,6 +198,13 @@ static inline void replenish_from_cache(size_t order)
 	}
 }
 
+//TODO: Its possible to store headroom per page.
+u16 maio_get_page_headroom(struct page *page)
+{
+	return maio_headroom;
+}
+EXPORT_SYMBOL(maio_get_page_headroom);
+
 struct page *maio_alloc_pages(size_t order)
 {
 	struct page *page;
@@ -246,6 +254,9 @@ static inline bool ring_full(u64 p, u64 c)
 
 void maio_post_rx_page(void *addr)
 {
+	trace_printk("[%d] Received  post of %llx:%llx [%llu]\n",
+			smp_processor_id(), (u64)addr, addr2uaddr(addr), (u64)addr & PAGE_MASK);
+/*
 	struct user_ring *ring;
 
 	++maio_rx_post_cnt;
@@ -268,6 +279,7 @@ void maio_post_rx_page(void *addr)
 	} else {
 		trace_printk("Non MAIO Posting to Ring %d:%llx:%llx\n", smp_processor_id(), addr2uaddr(ring), (u64)addr);
 	}
+*/
 }
 EXPORT_SYMBOL(maio_post_rx_page);
 
@@ -332,8 +344,8 @@ static inline ssize_t init_user_rings(struct file *file, const char __user *buf,
 static inline ssize_t maio_add_pages_0(struct file *file, const char __user *buf,
 					    size_t size, loff_t *_pos)
 {
-	char *kbuff, *cur;
-	u64   base;
+	void *kbuff;
+	struct meta_pages_0 *meta;
 	size_t len;
 
 	if (size <= 1 )//|| size >= PAGE_SIZE)
@@ -343,9 +355,22 @@ static inline ssize_t maio_add_pages_0(struct file *file, const char __user *buf
 	if (IS_ERR(kbuff))
 	        return PTR_ERR(kbuff);
 
-	base	= simple_strtoull(kbuff, &cur, 16);
-	len	= simple_strtol(cur + 1, &cur, 10);
-	pr_err("Got: [%llx: %ld]\n", base, len);
+	meta = kbuff;
+	pr_err("meta: [%u: 0x%x %u 0x%x]\n", meta->nr_pages, meta->stride, meta->headroom, meta->flags);
+	if (!maio_headroom)
+		maio_headroom = meta->headroom;
+	else
+		assert(maio_headroom = meta->headroom);
+
+	for (len = 0; len < meta->nr_pages; len++) {
+		void *kbase = uaddr2addr(mtt, meta->bufs[len]);
+		kbase = (void *)((u64)kbase  & PAGE_MASK);
+		trace_printk("[%ld]adding %llx [%llx]\n", len, (u64 )kbase, meta->bufs[len]);
+		if (!kbase)
+			return -EINVAL;
+		assert(get_maio_elem_order(virt_to_head_page(kbase)) == 0);
+		maio_free_elem(kbase, 0);
+	}
 	kfree(kbuff);
 
 	return 0;
@@ -383,7 +408,7 @@ static inline ssize_t maio_map_page(struct file *file, const char __user *buf,
 	for (i = 0; i < len; i++) {
 		u64 uaddr = base + (i * HUGE_SIZE);
 		rc = get_user_pages(uaddr, (1 << HUGE_ORDER), FOLL_LONGTERM, &umem_pages[0], NULL);
-		pr_err("[%ld]%llx[%llx:%d] \n", rc, uaddr, (unsigned long long)umem_pages[0],
+		trace_printk("[%ld]%llx[%llx:%d] \n", rc, uaddr, (unsigned long long)umem_pages[0],
 							compound_order(compound_head(umem_pages[0])));
 		/*
 			set_maio_page. K > V.
@@ -398,10 +423,10 @@ static inline ssize_t maio_map_page(struct file *file, const char __user *buf,
 		/* Allow for the Allocator to get elements on demand, flexible support for variable sizes */
 		if (cache)
 			maio_cache_hp(umem_pages[0]);
-		pr_err("Added %llx:%llx (umem %llx)to MAIO\n", uaddr, (u64)umem_pages[0], get_maio_uaddr(umem_pages[0]));
+		trace_printk("Added %llx:%llx (umem %llx)to MAIO\n", uaddr, (u64)umem_pages[0], get_maio_uaddr(umem_pages[0]));
 	}
 
-	trace_printk("%d: %s maio_maped\n", smp_processor_id(), __FUNCTION__);
+	trace_printk("%d: %s maio_maped [%llx-%llx)\n", smp_processor_id(), __FUNCTION__, mtt->start, mtt->end);
 
 /*
 	init_user_rings();

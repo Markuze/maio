@@ -9,7 +9,7 @@ static inline bool mlx5e_rx_is_xdp(struct mlx5e_params *params,
 	return params->xdp_prog || xsk;
 }
 
-/* Headroom is set here... */
+/* TODO: fixup Headroom is set here... */
 u16 mlx5e_get_linear_rq_headroom(struct mlx5e_params *params,
 				 struct mlx5e_xsk_param *xsk)
 {
