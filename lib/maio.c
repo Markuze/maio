@@ -330,12 +330,11 @@ static inline ssize_t init_user_rings(struct file *file, const char __user *buf,
 }
 
 static inline ssize_t maio_add_pages_0(struct file *file, const char __user *buf,
-					    size_t size, loff_t *_pos, bool cache)
+					    size_t size, loff_t *_pos)
 {
 	char *kbuff, *cur;
 	u64   base;
 	size_t len;
-	long rc, i;
 
 	if (size <= 1 )//|| size >= PAGE_SIZE)
 	        return -EINVAL;
@@ -348,6 +347,8 @@ static inline ssize_t maio_add_pages_0(struct file *file, const char __user *buf
 	len	= simple_strtol(cur + 1, &cur, 10);
 	pr_err("Got: [%llx: %ld]\n", base, len);
 	kfree(kbuff);
+
+	return 0;
 }
 
 static inline ssize_t maio_map_page(struct file *file, const char __user *buf,

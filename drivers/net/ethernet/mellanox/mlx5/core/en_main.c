@@ -312,6 +312,7 @@ static void mlx5e_init_frags_partition(struct mlx5e_rq *rq)
 {
 	struct mlx5e_wqe_frag_info next_frag = {};
 	struct mlx5e_wqe_frag_info *prev = NULL;
+	static int once;
 	int i;
 
 	next_frag.di = &rq->wqe.di[0];
@@ -323,6 +324,8 @@ static void mlx5e_init_frags_partition(struct mlx5e_rq *rq)
 		int f;
 
 		for (f = 0; f < rq->wqe.info.num_frags; f++, frag++) {
+			if (!once++)
+				pr_err("Serendip: offset %ld , stide 0x%lx\n", next_frag.offset, frag_info[f].frag_stride);
 			if (next_frag.offset + frag_info[f].frag_stride > PAGE_SIZE) {
 				next_frag.di++;
 				next_frag.offset = 0;
@@ -440,6 +443,8 @@ static int mlx5e_alloc_rq(struct mlx5e_channel *c,
 
 	rq->buff.map_dir = params->xdp_prog ? DMA_BIDIRECTIONAL : DMA_FROM_DEVICE;
 	rq->buff.headroom = mlx5e_get_rq_headroom(mdev, params, xsk);
+
+	pr_err("Serendip: :Headrooom : %d\n", rq->buff.headroom);
 	pool_size = 1 << params->log_rq_mtu_frames;
 
 	switch (rq->wq_type) {
