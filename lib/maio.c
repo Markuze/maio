@@ -58,7 +58,7 @@ EXPORT_SYMBOL(global_maio_matrix);
 /*TODO: Remove*/
 static u64 maio_rx_post_cnt;
 
-static u16 maio_headroom;
+static u16 maio_headroom = 256;
 
 /* HP Cache */
 static LIST_HEAD(hp_cache);
@@ -385,7 +385,7 @@ static inline ssize_t maio_add_pages_0(struct file *file, const char __user *buf
 	if (!maio_headroom)
 		maio_headroom = meta->headroom;
 	else
-		assert(maio_headroom = meta->headroom);
+		assert(maio_headroom >= meta->headroom);
 
 	for (len = 0; len < meta->nr_pages; len++) {
 		void *kbase = uaddr2addr(mtt, meta->bufs[len]);

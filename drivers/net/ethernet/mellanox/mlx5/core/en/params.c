@@ -13,6 +13,9 @@ static inline bool mlx5e_rx_is_xdp(struct mlx5e_params *params,
 u16 mlx5e_get_linear_rq_headroom(struct mlx5e_params *params,
 				 struct mlx5e_xsk_param *xsk)
 {
+	/* Better ways to do this... */
+	return 256;
+#if 0
 	u16 headroom;
 
 	if (xsk)
@@ -25,6 +28,7 @@ u16 mlx5e_get_linear_rq_headroom(struct mlx5e_params *params,
 		headroom += MLX5_RX_HEADROOM;
 
 	return headroom;
+#endif
 }
 
 u32 mlx5e_rx_get_min_frag_sz(struct mlx5e_params *params,
