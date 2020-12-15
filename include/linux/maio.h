@@ -2,19 +2,39 @@
 #define  __MAIO__H
 
 #define UMAIO_RING_SZ	512
+#define NUM_MAX_RINGS	16
 #define UMAIO_RING_MASK	(UMAIO_RING_SZ -1)
 
 extern volatile bool maio_configured;
 extern struct user_matrix *global_maio_matrix;
 
-struct user_ring {
-	u64 cons;
-	u64 addr[UMAIO_RING_SZ]; //should be TLV for multipage buffers.
-	u64 prod;
+/* Caution: Should be same as user counterpart */
+struct common_ring_info {
+        u32 nr_rx_rings;
+        u32 nr_tx_rings;
+        u32 nr_rx_sz;
+        u32 nr_tx_sz;
+
+	/* uaddr for {R|T}X tings*/
+        u64 rx_rings[NUM_MAX_RINGS];
+        u64 tx_rings[NUM_MAX_RINGS];
+};
+
+
+struct percpu_maio_qp {
+	unsigned long rx_counter;
+	unsigned long tx_counter;
+
+	u32 rx_sz;
+	u32 tx_sz;
+
+        u64 *rx_ring;
+        u64 *tx_ring;
 };
 
 struct user_matrix {
-	struct user_ring ring[0];
+	struct common_ring_info info;
+	u64 entries[0] ____cacheline_aligned_in_smp;
 };
 
 struct meta_pages_0 {

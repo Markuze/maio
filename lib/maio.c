@@ -54,14 +54,20 @@ static struct maio_magz global_maio;
 /* User matrix : No longer static as the threads should be in a module */
 struct user_matrix *global_maio_matrix;
 EXPORT_SYMBOL(global_maio_matrix);
+
+/*TODO: Remove*/
 static u64 maio_rx_post_cnt;
 
 static u16 maio_headroom;
+
 /* HP Cache */
 static LIST_HEAD(hp_cache);
 static unsigned long hp_cache_flags;
 DEFINE_SPINLOCK(hp_cache_lock);
 static unsigned long hp_cache_size;
+
+
+DEFINE_PER_CPU(struct percpu_maio_qp, maio_qp);
 /*
 	For multiple reg ops a tree is needed
 		1. For security and rereg need owner id and mmap to specific addr.
@@ -103,7 +109,7 @@ static inline void maio_cache_hp(struct page *page)
 	struct maio_cached_buffer *buffer = page_address(page);
 
 	/* The text is not where you expect: use char* buffer to use 16.... *facepalm* */
-	snprintf((char *)&buffer[1], 64, "heya!! %llx:%llx\n\0", (u64)buffer, addr2uaddr(buffer));
+	snprintf((char *)&buffer[1], 64, "heya!! %llx:%llx\n", (u64)buffer, addr2uaddr(buffer));
 	trace_printk("Written text to %llx:%llx\n", (u64)&buffer[1], addr2uaddr(buffer));
 	spin_lock_irqsave(&hp_cache_lock, hp_cache_flags);
 	list_add(&buffer->list, &hp_cache);
@@ -254,32 +260,28 @@ static inline bool ring_full(u64 p, u64 c)
 
 void maio_post_rx_page(void *addr)
 {
-	trace_printk("[%d] Received  post of %llx:%llx [%llu]\n",
-			smp_processor_id(), (u64)addr, addr2uaddr(addr), (u64)addr & PAGE_MASK);
-/*
-	struct user_ring *ring;
+	struct percpu_maio_qp *qp = this_cpu_ptr(&maio_qp);
 
-	++maio_rx_post_cnt;
 	if (!global_maio_matrix) {
 		pr_err("global matrix not configured!!!");
 		trace_printk("global matrix not configured!!!");
 		return;
 	}
 
-	ring = &global_maio_matrix->ring[smp_processor_id()];
-	if (unlikely(ring_full(ring->prod, ring->cons))) {
+	trace_printk("[%d] Received  post of %llx:%llx\n",
+			smp_processor_id(), (u64)addr, addr2uaddr(addr));
+	if (qp->rx_ring[qp->rx_counter]) {
 		trace_printk("[%d]User to slow. dropping post of %llx:%llx\n",
 				smp_processor_id(), (u64)addr, addr2uaddr(addr));
 		return;
 	}
+
 	if (is_maio_page(virt_to_page(addr))) {
-		trace_printk("Posting to Ring %d:%llx: %llx\n", smp_processor_id(), addr2uaddr(ring), addr2uaddr(addr));
-		ring->addr[ring->prod & UMAIO_RING_MASK] = addr2uaddr(addr);
-		++ring->prod;
+		qp->rx_ring[qp->rx_counter & (qp->rx_sz -1)] = addr2uaddr(addr);
+		++qp->rx_counter;
 	} else {
-		trace_printk("Non MAIO Posting to Ring %d:%llx:%llx\n", smp_processor_id(), addr2uaddr(ring), (u64)addr);
+		trace_printk("Non MAIO Posting to Ring %d:%llx:%llx\n", smp_processor_id(), addr2uaddr(addr), (u64)addr);
 	}
-*/
 }
 EXPORT_SYMBOL(maio_post_rx_page);
 
@@ -288,7 +290,7 @@ static inline ssize_t maio_enable(struct file *file, const char __user *buf,
 {	char	*kbuff, *cur;
 	size_t 	val;
 
-	if (size <= 1 || size >= PAGE_SIZE)
+	if (size < 1 || size >= PAGE_SIZE)
 	        return -EINVAL;
 
 	kbuff = memdup_user_nul(buf, size);
@@ -311,7 +313,7 @@ static inline ssize_t init_user_rings(struct file *file, const char __user *buf,
 	char	*kbuff, *cur;
 	void 	*kbase;
 	size_t 	len;
-	long 	rc = 0;
+	long 	rc = 0, i;
 	u64	base;
 
 	if (size <= 1 || size >= PAGE_SIZE)
@@ -327,6 +329,8 @@ static inline ssize_t init_user_rings(struct file *file, const char __user *buf,
 
 	kbase = uaddr2addr(mtt, base);
 	if (!kbase) {
+
+		pr_err("Uaddr %llx is not found in MTT [0x%llx - 0x%llx)\n", base, mtt->start, mtt->end);
 		if ((rc = get_user_pages(base, (len >> PAGE_SHIFT), FOLL_LONGTERM, &umem_pages[0], NULL)) < 0) {
 			pr_err("ERROR on get_user_pages %ld\n", rc);
 			return rc;
@@ -336,7 +340,28 @@ static inline ssize_t init_user_rings(struct file *file, const char __user *buf,
 	pr_err("MTRX is set to %llx[%llx] user %llx order [%d] rc = %ld\n", (u64)kbase, (u64)page_address(umem_pages[0]),
 			base, compound_order(virt_to_head_page(kbase)), rc);
 	global_maio_matrix = (struct user_matrix *)kbase;
-	pr_err("Set user matrix to %llx [%ld]\n", (u64)global_maio_matrix, len);
+	pr_err("Set user matrix to %llx [%ld]: RX %d [%d] TX %d [%d]\n", (u64)global_maio_matrix, len,
+				global_maio_matrix->info.nr_rx_rings,
+				global_maio_matrix->info.nr_rx_sz,
+				global_maio_matrix->info.nr_tx_rings,
+				global_maio_matrix->info.nr_tx_sz);
+
+	for_each_possible_cpu(i) {
+		struct percpu_maio_qp *qp = per_cpu_ptr(&maio_qp, i);
+
+		pr_err("[%ld]Ring: RX:%llx  - %llx:: TX: %llx - %llx\n", i,
+				global_maio_matrix->info.rx_rings[i],
+				(u64)uaddr2addr(mtt, global_maio_matrix->info.rx_rings[i]),
+				global_maio_matrix->info.tx_rings[i],
+				(u64)uaddr2addr(mtt, global_maio_matrix->info.tx_rings[i]));
+
+		qp->rx_counter = 0;
+		qp->tx_counter = 0;
+		qp->rx_sz = global_maio_matrix->info.nr_rx_sz;
+		qp->tx_sz = global_maio_matrix->info.nr_tx_sz;
+		qp->rx_ring = uaddr2addr(mtt, global_maio_matrix->info.rx_rings[i]);
+		qp->tx_ring = uaddr2addr(mtt, global_maio_matrix->info.tx_rings[i]);
+	}
 
 	return size;
 }
@@ -405,6 +430,8 @@ static inline ssize_t maio_map_page(struct file *file, const char __user *buf,
 	mtt->len	= len;
 	mtt->order	= HUGE_ORDER;
 
+	pr_err("MTT [0x%llx - 0x%llx)\n", mtt->start, mtt->end);
+
 	for (i = 0; i < len; i++) {
 		u64 uaddr = base + (i * HUGE_SIZE);
 		rc = get_user_pages(uaddr, (1 << HUGE_ORDER), FOLL_LONGTERM, &umem_pages[0], NULL);
@@ -419,14 +446,18 @@ static inline ssize_t maio_map_page(struct file *file, const char __user *buf,
 		mtt->pages[i] =	umem_pages[0];
 		if (i != uaddr2idx(mtt, uaddr))
 			pr_err("Please Fix uaddr2idx: %ld != %llx\n", i, uaddr2idx(mtt, uaddr));
+		if (uaddr2addr(mtt, uaddr) != page_address(umem_pages[0]))
+			pr_err("Please Fix uaddr2addr: %llx:: %llx != %llx [ 0x%0x]\n", uaddr,
+				(u64)page_address(umem_pages[0]), (u64)uaddr2addr(mtt, uaddr), HUGE_OFFSET);
 		set_maio_uaddr(umem_pages[0], uaddr);
 		/* Allow for the Allocator to get elements on demand, flexible support for variable sizes */
 		if (cache)
 			maio_cache_hp(umem_pages[0]);
-		trace_printk("Added %llx:%llx (umem %llx)to MAIO\n", uaddr, (u64)umem_pages[0], get_maio_uaddr(umem_pages[0]));
+		trace_printk("Added %llx:%llx (umem %llx:%llx)to MAIO\n", uaddr, (u64)page_address(umem_pages[0]),
+					get_maio_uaddr(umem_pages[0]), (u64)uaddr2addr(mtt, uaddr));
 	}
-
-	trace_printk("%d: %s maio_maped [%llx-%llx)\n", smp_processor_id(), __FUNCTION__, mtt->start, mtt->end);
+	pr_err("%d: %s maio_maped U[%llx-%llx) K:[%llx-%llx)\n", smp_processor_id(), __FUNCTION__, mtt->start, mtt->end,
+			(u64)uaddr2addr(mtt, mtt->start), (u64)uaddr2addr(mtt, mtt->end));
 
 /*
 	init_user_rings();
