@@ -66,6 +66,8 @@ static unsigned long hp_cache_flags;
 DEFINE_SPINLOCK(hp_cache_lock);
 static unsigned long hp_cache_size;
 
+static u64 min_pages_0 = ULLONG_MAX;
+static u64 max_pages_0;
 
 DEFINE_PER_CPU(struct percpu_maio_qp, maio_qp);
 /*
@@ -154,6 +156,18 @@ static inline void put_buffers(void *elem, u16 order)
 	maio_free_elem(elem, order);
 }
 
+void maio_page_free(struct page *page)
+{
+	/* Need to make sure we dont get only head pages here...*/
+	trace_printk("%d:%s: %llx %pS\n", smp_processor_id(), __FUNCTION__, (u64)page, __builtin_return_address(0));
+	assert(is_maio_page(page));
+	assert(min_pages_0 <= (u64)page);
+	assert(max_pages_0 >= (u64)page);
+	assert(page_ref_count(page) == 0);
+	put_buffers(page_address(page), get_maio_elem_order(page));
+	return;
+}
+EXPORT_SYMBOL(maio_page_free);
 
 void maio_frag_free(void *addr)
 {
@@ -163,28 +177,16 @@ void maio_frag_free(void *addr)
 		2. mag free...
 	*/
 	struct page* page = virt_to_page(addr); /* TODO: Align on elem order*/
-	//trace_printk("%d:%s: %pS\n", smp_processor_id(), __FUNCTION__, __builtin_return_address(0));
-	//trace_printk("%d:%s:%llx\n", smp_processor_id(), __FUNCTION__, (u64)page);
+	trace_printk("%d:%s: %llx %pS\n", smp_processor_id(), __FUNCTION__, (u64)page, __builtin_return_address(0));
 	assert(is_maio_page(page));
+	assert(min_pages_0 <= (u64)page);
+	assert(max_pages_0 >= (u64)page);
 	assert(page_ref_count(page) == 0);
 	put_buffers(page_address(page), get_maio_elem_order(page));
 
 	return;
 }
 EXPORT_SYMBOL(maio_frag_free);
-
-void maio_page_free(struct page *page)
-{
-	/* Need to make sure we dont get only head pages here...*/
-	/* ref_count local - when 0 reached free all elemnts... - maio_frag_free*/
-	//	trace_printk("%d:%s: %pS\n", smp_processor_id(), __FUNCTION__, __builtin_return_address(0));
-	//trace_printk("%d:%s:%llx\n", smp_processor_id(), __FUNCTION__, (u64)page);
-	assert(is_maio_page(page));
-	assert(page_ref_count(page) == 0);
-	put_buffers(page_address(page), get_maio_elem_order(page));
-	return;
-}
-EXPORT_SYMBOL(maio_page_free);
 
 static inline void replenish_from_cache(size_t order)
 {
@@ -224,7 +226,11 @@ struct page *maio_alloc_pages(size_t order)
 	assert(buffer != NULL);//should not happen
 	page =  (buffer) ? virt_to_page(buffer) : ERR_PTR(-ENOMEM);
 	if (likely(page)) {
-		assert(page_ref_count(page) == 0);
+		if (!(page_ref_count(page) == 0)) {
+			trace_printk("%d:%s:%llx :%s\n", smp_processor_id(), __FUNCTION__, (u64)page, PageHead(page)?"HEAD":"");
+			trace_printk("%d:%s:%llx[%d]%llx\n", smp_processor_id(), __FUNCTION__, page_ref_count(page));
+			panic("P %llx: %llx  has %d refcnt\n", page, page_address(page), page_ref_count(page));
+		}
 		assert(is_maio_page(page));
 		init_page_count(page);
 	}
@@ -264,24 +270,26 @@ void maio_post_rx_page(void *addr)
 
 	if (!global_maio_matrix) {
 		pr_err("global matrix not configured!!!");
-		trace_printk("global matrix not configured!!!");
 		return;
 	}
 
-	trace_printk("[%d] Received  post of %llx:%llx\n",
-			smp_processor_id(), (u64)addr, addr2uaddr(addr));
+	trace_printk("%d:%s:%llx[%d]%llx\n", smp_processor_id(), __FUNCTION__,
+                      (u64)virt_to_page(addr), page_ref_count(virt_to_page(addr)),
+                      (u64)addr);
+	/*
 	if (qp->rx_ring[qp->rx_counter]) {
 		trace_printk("[%d]User to slow. dropping post of %llx:%llx\n",
 				smp_processor_id(), (u64)addr, addr2uaddr(addr));
 		return;
 	}
-
 	if (is_maio_page(virt_to_page(addr))) {
 		qp->rx_ring[qp->rx_counter & (qp->rx_sz -1)] = addr2uaddr(addr);
 		++qp->rx_counter;
-	} else {
-		trace_printk("Non MAIO Posting to Ring %d:%llx:%llx\n", smp_processor_id(), addr2uaddr(addr), (u64)addr);
 	}
+	*/
+	/*else {
+		trace_printk("Non MAIO Posting to Ring %d:%llx:%llx\n", smp_processor_id(), addr2uaddr(addr), (u64)addr);
+	}*/
 }
 EXPORT_SYMBOL(maio_post_rx_page);
 
@@ -389,10 +397,22 @@ static inline ssize_t maio_add_pages_0(struct file *file, const char __user *buf
 
 	for (len = 0; len < meta->nr_pages; len++) {
 		void *kbase = uaddr2addr(mtt, meta->bufs[len]);
-		kbase = (void *)((u64)kbase  & PAGE_MASK);
-		trace_printk("[%ld]adding %llx [%llx]\n", len, (u64 )kbase, meta->bufs[len]);
+		struct page *page;
+
 		if (!kbase)
 			return -EINVAL;
+
+		page = virt_to_page(kbase);
+		kbase = (void *)((u64)kbase  & PAGE_MASK);
+		trace_printk("[%ld]adding %llx [%llx]  - P %llx[%d]\n", len, (u64 )kbase, meta->bufs[len],
+				(u64)page, page_ref_count(page));
+		set_page_count(page, 0);
+		if (min_pages_0  > (u64)page)
+			min_pages_0 = (u64)page;
+
+		if (max_pages_0  < (u64)page)
+			max_pages_0 = (u64)page;
+
 		assert(get_maio_elem_order(virt_to_head_page(kbase)) == 0);
 		maio_free_elem(kbase, 0);
 	}
@@ -436,7 +456,7 @@ static inline ssize_t maio_map_page(struct file *file, const char __user *buf,
 		u64 uaddr = base + (i * HUGE_SIZE);
 		rc = get_user_pages(uaddr, (1 << HUGE_ORDER), FOLL_LONGTERM, &umem_pages[0], NULL);
 		trace_printk("[%ld]%llx[%llx:%d] \n", rc, uaddr, (unsigned long long)umem_pages[0],
-							compound_order(compound_head(umem_pages[0])));
+							compound_order(__compound_head(umem_pages[0], 0)));
 		/*
 			set_maio_page. K > V.
 			record address. V > K.

@@ -471,10 +471,8 @@ mlx5e_add_skb_frag(struct mlx5e_rq *rq, struct sk_buff *skb,
 				len, DMA_FROM_DEVICE);
 	/* pages need to be alloceds with refcount 0 */
 	page_ref_inc(di->page);
-/*
-        trace_printk("%d:%s:%llx[%d]\n", smp_processor_id(), __FUNCTION__,
+        pr_err("ERROR:ERROR: %d:%s:%llx[%d]\n", smp_processor_id(), __FUNCTION__,
 			(u64)di->page, page_ref_count(di->page));
-*/
 	skb_add_rx_frag(skb, skb_shinfo(skb)->nr_frags,
 			di->page, frag_offset, len, truesize);
 }

@@ -936,6 +936,7 @@ static inline void set_compound_order(struct page *page, unsigned int order)
 
 static inline void maio_put_page(struct page *page)
 {
+	trace_printk("Page %llx [%d]\n", (u64)page, page_ref_count(page));
 	VM_BUG_ON_PAGE(page_ref_count(page) < 1, page);
 	/*TODO: Need to find relevant head on multipage allocs*/
 	if (put_page_testzero(page))
@@ -956,7 +957,7 @@ static inline void set_maio_uaddr(struct page *page, u64 uaddr)
 
 static inline u64 get_maio_uaddr(struct page *page)
 {
-	page = compound_head(page);
+	page = __compound_head(page, 0);
 	return page[1].uaddr;
 }
 
@@ -967,7 +968,7 @@ static inline void set_maio_elem_order(struct page *page, unsigned int order)
 
 static inline u16 get_maio_elem_order(struct page *page)
 {
-	page = compound_head(page);
+	page = __compound_head(page, 0);
 	return page[1].elem_order;
 }
 
