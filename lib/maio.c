@@ -228,8 +228,9 @@ struct page *maio_alloc_pages(size_t order)
 	if (likely(page)) {
 		if (!(page_ref_count(page) == 0)) {
 			trace_printk("%d:%s:%llx :%s\n", smp_processor_id(), __FUNCTION__, (u64)page, PageHead(page)?"HEAD":"");
-			trace_printk("%d:%s:%llx[%d]%llx\n", smp_processor_id(), __FUNCTION__, page_ref_count(page));
-			panic("P %llx: %llx  has %d refcnt\n", page, page_address(page), page_ref_count(page));
+			trace_printk("%d:%s:%llx[%d]%llx\n", smp_processor_id(),
+					__FUNCTION__, (u64)page, page_ref_count(page), (u64)page_address(page));
+			panic("P %llx: %llx  has %d refcnt\n", (u64)page, (u64)page_address(page), page_ref_count(page));
 		}
 		assert(is_maio_page(page));
 		init_page_count(page);
