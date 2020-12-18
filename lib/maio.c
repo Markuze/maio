@@ -27,6 +27,7 @@
 #define PAGES_IN_HUGE	(1<<HUGE_ORDER)
 
 struct maio_cached_buffer {
+	char headroom[256];
 	struct list_head list;
 };
 
@@ -62,9 +63,16 @@ static u16 maio_headroom = 256;
 
 /* HP Cache */
 static LIST_HEAD(hp_cache);
-static unsigned long hp_cache_flags;
 DEFINE_SPINLOCK(hp_cache_lock);
 static unsigned long hp_cache_size;
+
+/* Head Page Cache */
+/* A workaround, Head Pages Refcounts may go up/down due to new process mapping or old processes leaving.
+   We use the first 4K pages for internal MAIO uses (e.g., magazine alloc, copied I/O)
+*/
+static LIST_HEAD(head_cache);
+DEFINE_SPINLOCK(head_cache_lock);
+static unsigned long head_cache_size;
 
 static u64 min_pages_0 = ULLONG_MAX;
 static u64 max_pages_0;
@@ -106,9 +114,39 @@ static inline u64 addr2uaddr(void *addr)
 	return get_maio_uaddr(virt_to_head_page(addr)) + offset;
 }
 
+static inline void maio_cache_head(struct page *page)
+{
+	struct maio_cached_buffer *buffer = page_address(page);
+	unsigned long head_cache_flags;
+
+	spin_lock_irqsave(&head_cache_lock, head_cache_flags);
+	list_add(&buffer->list, &head_cache);
+	++head_cache_size;
+	spin_unlock_irqrestore(&head_cache_lock, head_cache_flags);
+}
+
+static inline struct page *maio_get_cached_head(void)
+{
+	struct maio_cached_buffer *buffer;
+	unsigned long head_cache_flags;
+
+	spin_lock_irqsave(&head_cache_lock, head_cache_flags);
+
+	buffer = list_first_entry_or_null(&head_cache,
+						struct maio_cached_buffer, list);
+	if (likely(buffer)) {
+		list_del(&buffer->list);
+		--head_cache_size;
+	}
+	spin_unlock_irqrestore(&head_cache_lock, head_cache_flags);
+
+	return (buffer) ? virt_to_page(buffer): NULL;
+}
+
 static inline void maio_cache_hp(struct page *page)
 {
 	struct maio_cached_buffer *buffer = page_address(page);
+	unsigned long hp_cache_flags;
 
 	/* The text is not where you expect: use char* buffer to use 16.... *facepalm* */
 	snprintf((char *)&buffer[1], 64, "heya!! %llx:%llx\n", (u64)buffer, addr2uaddr(buffer));
@@ -122,6 +160,8 @@ static inline void maio_cache_hp(struct page *page)
 static inline struct page *maio_get_cached_hp(void)
 {
 	struct maio_cached_buffer *buffer;
+	unsigned long hp_cache_flags;
+
 	spin_lock_irqsave(&hp_cache_lock, hp_cache_flags);
 
 	buffer = list_first_entry_or_null(&hp_cache,
@@ -148,6 +188,7 @@ static inline void maio_free_elem(void *elem, u16 order)
 	mag_free_elem(&global_maio.mag[order2idx(order)], elem);
 }
 
+//put_page
 static inline void put_buffers(void *elem, u16 order)
 {
 	/*TODO: order may make sense some day in case of e.g., 2K buffers
@@ -220,8 +261,12 @@ struct page *maio_alloc_pages(size_t order)
 
 	/* should happen on init when mag is empty.*/
 	if (unlikely(!buffer)) {
+		/*
 		replenish_from_cache(order);
 		buffer = mag_alloc_elem(&global_maio.mag[order2idx(order)]);
+		*/
+		pr_err("Failed to alloc from MAIO mag\n");
+		return alloc_page(GFP_KERNEL|GFP_ATOMIC);
 	}
 	assert(buffer != NULL);//should not happen
 	page =  (buffer) ? virt_to_page(buffer) : ERR_PTR(-ENOMEM);
@@ -405,17 +450,25 @@ static inline ssize_t maio_add_pages_0(struct file *file, const char __user *buf
 
 		page = virt_to_page(kbase);
 		kbase = (void *)((u64)kbase  & PAGE_MASK);
-		trace_printk("[%ld]adding %llx [%llx]  - P %llx[%d]\n", len, (u64 )kbase, meta->bufs[len],
-				(u64)page, page_ref_count(page));
-		set_page_count(page, 0);
+
 		if (min_pages_0  > (u64)page)
 			min_pages_0 = (u64)page;
 
 		if (max_pages_0  < (u64)page)
 			max_pages_0 = (u64)page;
 
-		assert(get_maio_elem_order(virt_to_head_page(kbase)) == 0);
-		maio_free_elem(kbase, 0);
+		if (PageHead(page)) {
+			trace_printk("[%ld]Caching %llx [%llx]  - P %llx[%d]\n", len, (u64 )kbase, meta->bufs[len],
+				(u64)page, page_ref_count(page));
+			maio_cache_head(page);
+		} else {
+			trace_printk("[%ld]Adding %llx [%llx]  - P %llx[%d]\n", len, (u64 )kbase, meta->bufs[len],
+					(u64)page, page_ref_count(page));
+			set_page_count(page, 0);
+
+			assert(get_maio_elem_order(__compound_head(page, 0)) == 0);
+			maio_free_elem(kbase, 0);
+		}
 	}
 	kfree(kbuff);
 
