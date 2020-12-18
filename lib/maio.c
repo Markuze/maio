@@ -43,6 +43,7 @@ struct maio_magz {
 	struct mag_allocator 	mag[NUM_MAIO_SIZES];
 	u32			num_pages;
 };
+
 /* GLOBAL MAIO FLAG*/
 volatile bool maio_configured;
 EXPORT_SYMBOL(maio_configured);
@@ -310,32 +311,35 @@ static inline bool ring_full(u64 p, u64 c)
 	return (((p + 1) & UMAIO_RING_MASK) == (c & UMAIO_RING_MASK));
 }
 
-void maio_post_rx_page(void *addr)
+int maio_post_rx_page(void *addr)
 {
 	struct percpu_maio_qp *qp = this_cpu_ptr(&maio_qp);
 
+	if (!maio_configured)
+		return 0;
 	if (!global_maio_matrix) {
 		pr_err("global matrix not configured!!!");
-		return;
+		return 0;
 	}
 
-	trace_printk("%d:%s:%llx[%d]%llx\n", smp_processor_id(), __FUNCTION__,
-                      (u64)virt_to_page(addr), page_ref_count(virt_to_page(addr)),
-                      (u64)addr);
-	/*
 	if (qp->rx_ring[qp->rx_counter]) {
 		trace_printk("[%d]User to slow. dropping post of %llx:%llx\n",
 				smp_processor_id(), (u64)addr, addr2uaddr(addr));
-		return;
+		return 0;
 	}
+
 	if (is_maio_page(virt_to_page(addr))) {
+		trace_printk("%d:%s:%llx[%d]%llx\n", smp_processor_id(), __FUNCTION__,
+			      (u64)virt_to_page(addr), page_ref_count(virt_to_page(addr)),
+			      (u64)addr);
 		qp->rx_ring[qp->rx_counter & (qp->rx_sz -1)] = addr2uaddr(addr);
 		++qp->rx_counter;
+		//return 1;
+	} else {
+		trace_printk("Non MAIO Posting to Ring %d:%llx:%llx: please add copy function\n", smp_processor_id(), addr2uaddr(addr), (u64)addr);
+		return 0;
 	}
-	*/
-	/*else {
-		trace_printk("Non MAIO Posting to Ring %d:%llx:%llx\n", smp_processor_id(), addr2uaddr(addr), (u64)addr);
-	}*/
+	return 0;
 }
 EXPORT_SYMBOL(maio_post_rx_page);
 

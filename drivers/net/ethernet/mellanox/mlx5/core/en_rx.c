@@ -1182,6 +1182,9 @@ mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq, struct mlx5_cqe64 *cqe,
 	prefetchw(va); /* xdp_frame data area */
 	prefetch(data);
 
+	if (maio_post_rx_page(va))
+		return NULL; /* page/packet was consumed by MAIO */
+
 	/* Capture RX here... */
 	mlx5e_fill_xdp_buff(rq, va, rx_headroom, cqe_bcnt, &xdp);
 	if (mlx5e_xdp_handle(rq, di, &cqe_bcnt, &xdp))
@@ -1196,11 +1199,6 @@ mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq, struct mlx5_cqe64 *cqe,
 	/* queue up for recycling/reuse */
 	page_ref_inc(di->page);
 
-	if (maio_configured)
-		maio_post_rx_page(va);
-        //trace_printk("%d:%s:%llx[%d]%llx\n", smp_processor_id(), __FUNCTION__,
-	//		(u64)di->page, page_ref_count(di->page),
-	//		(u64)va);
 	return skb;
 }
 
