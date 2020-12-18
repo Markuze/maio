@@ -936,7 +936,7 @@ static inline void set_compound_order(struct page *page, unsigned int order)
 
 static inline void maio_put_page(struct page *page)
 {
-	trace_printk("Page %llx [%d]\n", (u64)page, page_ref_count(page));
+	//trace_printk("Page %llx [%d]\n", (u64)page, page_ref_count(page));
 	VM_BUG_ON_PAGE(page_ref_count(page) < 1, page);
 	/*TODO: Need to find relevant head on multipage allocs*/
 	if (put_page_testzero(page))
@@ -946,7 +946,7 @@ static inline void maio_put_page(struct page *page)
 static inline void maio_get_page(struct page *page)
 {
 	/*TODO: Need to find relevant head on multipage allocs*/
-	trace_printk("Page %llx [%d]\n", (u64)page, page_ref_count(page));
+	//trace_printk("Page %llx [%d]\n", (u64)page, page_ref_count(page));
 	VM_BUG_ON_PAGE(page_ref_count(page) < 1, page);
 	page_ref_inc(page);
 }
