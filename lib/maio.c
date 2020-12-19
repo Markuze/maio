@@ -201,7 +201,7 @@ static inline void put_buffers(void *elem, u16 order)
 void maio_page_free(struct page *page)
 {
 	/* Need to make sure we dont get only head pages here...*/
-	trace_printk("%d:%s: %llx %pS\n", smp_processor_id(), __FUNCTION__, (u64)page, __builtin_return_address(0));
+	//trace_printk("%d:%s: %llx %pS\n", smp_processor_id(), __FUNCTION__, (u64)page, __builtin_return_address(0));
 	assert(is_maio_page(page));
 	assert(min_pages_0 <= (u64)page);
 	assert(max_pages_0 >= (u64)page);
@@ -219,7 +219,7 @@ void maio_frag_free(void *addr)
 		2. mag free...
 	*/
 	struct page* page = virt_to_page(addr); /* TODO: Align on elem order*/
-	trace_printk("%d:%s: %llx %pS\n", smp_processor_id(), __FUNCTION__, (u64)page, __builtin_return_address(0));
+	//trace_printk("%d:%s: %llx %pS\n", smp_processor_id(), __FUNCTION__, (u64)page, __builtin_return_address(0));
 	assert(is_maio_page(page));
 	assert(min_pages_0 <= (u64)page);
 	assert(max_pages_0 >= (u64)page);
@@ -311,8 +311,9 @@ static inline bool ring_full(u64 p, u64 c)
 	return (((p + 1) & UMAIO_RING_MASK) == (c & UMAIO_RING_MASK));
 }
 
-int maio_post_rx_page(void *addr)
+int maio_post_rx_page(void *addr, u32 len)
 {
+	struct io_md *md = addr;
 	struct percpu_maio_qp *qp = this_cpu_ptr(&maio_qp);
 
 	if (!maio_configured)
@@ -328,12 +329,18 @@ int maio_post_rx_page(void *addr)
 		return 0;
 	}
 
+	md--;
 	if (is_maio_page(virt_to_page(addr))) {
 		trace_printk("%d:%s:%llx[%d]%llx\n", smp_processor_id(), __FUNCTION__,
 			      (u64)virt_to_page(addr), page_ref_count(virt_to_page(addr)),
 			      (u64)addr);
+		md->len 	= len;
+		md->posion	= MAIO_POISON;
+
+
 		qp->rx_ring[qp->rx_counter & (qp->rx_sz -1)] = addr2uaddr(addr);
 		++qp->rx_counter;
+
 		//return 1;
 	} else {
 		trace_printk("Non MAIO Posting to Ring %d:%llx:%llx: please add copy function\n", smp_processor_id(), addr2uaddr(addr), (u64)addr);

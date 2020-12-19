@@ -8,7 +8,15 @@
 extern volatile bool maio_configured;
 extern struct user_matrix *global_maio_matrix;
 
-/* Caution: Should be same as user counterpart */
+/********* Caution: Should be same as user counterpart ************************/
+
+#define MAIO_POISON (0xFEA20FDAU)
+
+struct io_md {
+        u32 len;
+        u32 poison;
+};
+
 struct common_ring_info {
         u32 nr_rx_rings;
         u32 nr_tx_rings;
@@ -20,7 +28,15 @@ struct common_ring_info {
         u64 tx_rings[NUM_MAX_RINGS];
 };
 
+struct meta_pages_0 {
+	u16 nr_pages;
+	u16 stride;
+	u16 headroom;
+	u16 flags;
+	u64 bufs[UMAIO_RING_SZ];
+};
 
+/*****************************************************************************/
 struct percpu_maio_qp {
 	unsigned long rx_counter;
 	unsigned long tx_counter;
@@ -37,13 +53,6 @@ struct user_matrix {
 	u64 entries[0] ____cacheline_aligned_in_smp;
 };
 
-struct meta_pages_0 {
-	u16 nr_pages;
-	u16 stride;
-	u16 headroom;
-	u16 flags;
-	u64 bufs[UMAIO_RING_SZ];
-};
 
 u16 maio_get_page_headroom(struct page *page);
 int maio_post_rx_page(void *addr);
