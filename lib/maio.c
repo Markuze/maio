@@ -60,7 +60,8 @@ EXPORT_SYMBOL(global_maio_matrix);
 /*TODO: Remove*/
 static u64 maio_rx_post_cnt;
 
-static u16 maio_headroom = 256;
+static u16 maio_headroom = 192;
+static u16 maio_stride = 0x800;//2K
 
 /* HP Cache */
 static LIST_HEAD(hp_cache);
@@ -255,6 +256,13 @@ u16 maio_get_page_headroom(struct page *page)
 }
 EXPORT_SYMBOL(maio_get_page_headroom);
 
+u16 maio_get_page_stride(struct page *page)
+{
+	return maio_stride;
+}
+EXPORT_SYMBOL(maio_get_page_stride);
+
+
 struct page *maio_alloc_pages(size_t order)
 {
 	struct page *page;
@@ -306,15 +314,37 @@ static inline void init_user_rings_kmem(void)
 
 }
 
+#if 0
 static inline bool ring_full(u64 p, u64 c)
 {
 	return (((p + 1) & UMAIO_RING_MASK) == (c & UMAIO_RING_MASK));
 }
+#endif
+
+static inline char* alloc_copy_buff(struct percpu_maio_qp *qp)
+{
+	char *data;
+
+	if (qp->cached_mbuf) {
+		data = qp->cached_mbuf;
+		qp->cached_mbuf = NULL;
+	} else {
+		struct page *page = maio_get_cached_head();
+		if (!page)
+			page = maio_alloc_page();
+		if (!page)
+			return NULL;
+		data = page_address(page) + maio_get_page_headroom(NULL);
+		qp->cached_mbuf = data + maio_get_page_stride(NULL);
+	}
+	return data;
+}
 
 int maio_post_rx_page(void *addr, u32 len)
 {
-	struct io_md *md = addr;
+	struct io_md *md;
 	struct percpu_maio_qp *qp = this_cpu_ptr(&maio_qp);
+	int copy = 0;
 
 	if (!maio_configured)
 		return 0;
@@ -329,23 +359,29 @@ int maio_post_rx_page(void *addr, u32 len)
 		return 0;
 	}
 
-	md--;
-	if (is_maio_page(virt_to_page(addr))) {
-		trace_printk("%d:%s:%llx[%d]%llx\n", smp_processor_id(), __FUNCTION__,
-			      (u64)virt_to_page(addr), page_ref_count(virt_to_page(addr)),
-			      (u64)addr);
-		md->len 	= len;
-		md->posion	= MAIO_POISON;
+	if (!is_maio_page(virt_to_page(addr))) {
+		char *buff = alloc_copy_buff(qp);
+		if (!buff) {
+			pr_err("Failed to alloc copy_buff!!!\n");
+			return 0;
+		}
+		memcpy(buff, addr, len);
+		addr = buff;
+		copy = 1;
 
-
-		qp->rx_ring[qp->rx_counter & (qp->rx_sz -1)] = addr2uaddr(addr);
-		++qp->rx_counter;
-
-		//return 1;
-	} else {
-		trace_printk("Non MAIO Posting to Ring %d:%llx:%llx: please add copy function\n", smp_processor_id(), addr2uaddr(addr), (u64)addr);
-		return 0;
 	}
+	trace_printk("%d:Posting[%lu] %s:%llx[%u]%llx\n", smp_processor_id(),
+			qp->rx_counter & (qp->rx_sz -1), copy ? "COPY" : "ZC",
+			(u64)addr, len, addr2uaddr(addr));
+	md = addr;
+	md--;
+	md->len 	= len;
+	md->poison	= MAIO_POISON;
+
+	qp->rx_ring[qp->rx_counter & (qp->rx_sz -1)] = addr2uaddr(addr);
+	++qp->rx_counter;
+	//return 1;
+
 	return 0;
 }
 EXPORT_SYMBOL(maio_post_rx_page);
@@ -447,10 +483,7 @@ static inline ssize_t maio_add_pages_0(struct file *file, const char __user *buf
 
 	meta = kbuff;
 	pr_err("meta: [%u: 0x%x %u 0x%x]\n", meta->nr_pages, meta->stride, meta->headroom, meta->flags);
-	if (!maio_headroom)
-		maio_headroom = meta->headroom;
-	else
-		assert(maio_headroom >= meta->headroom);
+	assert(maio_headroom >= meta->headroom);
 
 	for (len = 0; len < meta->nr_pages; len++) {
 		void *kbase = uaddr2addr(mtt, meta->bufs[len]);

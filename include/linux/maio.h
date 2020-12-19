@@ -1,6 +1,8 @@
 #ifndef  __MAIO__H
 #define  __MAIO__H
 
+#define UMAIO_HEADROOM	256 	//TODO: Figure out why 256 results in 4K stride in mlx5e
+#define UMAIO_STRIDE	0x1000
 #define UMAIO_RING_SZ	512
 #define NUM_MAX_RINGS	16
 #define UMAIO_RING_MASK	(UMAIO_RING_SZ -1)
@@ -46,6 +48,8 @@ struct percpu_maio_qp {
 
         u64 *rx_ring;
         u64 *tx_ring;
+
+	void *cached_mbuf;
 };
 
 struct user_matrix {
@@ -55,7 +59,7 @@ struct user_matrix {
 
 
 u16 maio_get_page_headroom(struct page *page);
-int maio_post_rx_page(void *addr);
+int maio_post_rx_page(void *addr, u32 len);
 void maio_frag_free(void *addr);
 void maio_page_free(struct page *page);
 void *maio_kalloc(void);

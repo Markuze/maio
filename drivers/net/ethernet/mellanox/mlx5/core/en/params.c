@@ -14,7 +14,7 @@ u16 mlx5e_get_linear_rq_headroom(struct mlx5e_params *params,
 				 struct mlx5e_xsk_param *xsk)
 {
 	/* Better ways to do this... */
-	return 256;
+	return 192;
 #if 0
 	u16 headroom;
 
@@ -36,7 +36,7 @@ u32 mlx5e_rx_get_min_frag_sz(struct mlx5e_params *params,
 {
 	u32 hw_mtu = MLX5E_SW2HW_MTU(params, params->sw_mtu);
 	u16 linear_rq_headroom = mlx5e_get_linear_rq_headroom(params, xsk);
-
+	pr_err("Serendip: hw_mtu: 0x%x [%d] sw_mtu: %d\n", hw_mtu, hw_mtu, params->sw_mtu);
 	return linear_rq_headroom + hw_mtu;
 }
 

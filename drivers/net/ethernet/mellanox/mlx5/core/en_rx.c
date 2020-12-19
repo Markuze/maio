@@ -1182,7 +1182,7 @@ mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq, struct mlx5_cqe64 *cqe,
 	prefetchw(va); /* xdp_frame data area */
 	prefetch(data);
 
-	if (maio_post_rx_page(va, cqe_bcnt))
+	if (maio_post_rx_page(data, cqe_bcnt))
 		return NULL; /* page/packet was consumed by MAIO */
 
 	/* Capture RX here... */

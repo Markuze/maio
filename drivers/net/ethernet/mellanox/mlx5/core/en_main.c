@@ -325,7 +325,7 @@ static void mlx5e_init_frags_partition(struct mlx5e_rq *rq)
 
 		for (f = 0; f < rq->wqe.info.num_frags; f++, frag++) {
 			if (!once++)
-				pr_err("Serendip: offset %ld , stide 0x%lx\n", next_frag.offset, frag_info[f].frag_stride);
+				pr_err("Serendip: offset %d , stide 0x%x\n", next_frag.offset, frag_info[f].frag_stride);
 			if (next_frag.offset + frag_info[f].frag_stride > PAGE_SIZE) {
 				next_frag.di++;
 				next_frag.offset = 0;
