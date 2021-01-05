@@ -5,6 +5,8 @@
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 #include <linux/string.h>
+#include <linux/netdevice.h>
+#include <linux/ctype.h> /*isdigit*/
 
 #ifndef assert
 #define assert(expr) 	do { \
@@ -17,36 +19,12 @@
 
 #endif
 
-#define show_line pr_err("%s:%d\n",__FUNCTION__, __LINE__)
-
-#define NUM_MAIO_SIZES	1
-#define HUGE_ORDER	9 /* compound_order of 2MB HP */
-#define HUGE_SHIFT	(HUGE_ORDER + PAGE_SHIFT)
-#define HUGE_SIZE	(1 << (HUGE_SHIFT))
-#define HUGE_OFFSET	(HUGE_SIZE -1)
-#define PAGES_IN_HUGE	(1<<HUGE_ORDER)
-
-struct maio_cached_buffer {
-	char headroom[256];
-	struct list_head list;
-};
-
-struct umem_region_mtt {
-	u64 start;	/* userland start region [*/
-	u64 end;	/* userland end region   ]*/
-	int len;	/* Number of HP */
-	int order;	/* Not realy needed as HUGE_ORDER is defined today */
-	struct page *pages[0];
-};
-
-struct maio_magz {
-	struct mag_allocator 	mag[NUM_MAIO_SIZES];
-	u32			num_pages;
-};
-
 /* GLOBAL MAIO FLAG*/
 volatile bool maio_configured;
 EXPORT_SYMBOL(maio_configured);
+
+//TODO: collect this shite in a struct
+
 /* get_user_pages */
 static struct page* umem_pages[1<<HUGE_ORDER];
 
@@ -78,6 +56,9 @@ static unsigned long head_cache_size;
 
 static u64 min_pages_0 = ULLONG_MAX;
 static u64 max_pages_0;
+
+static struct net_device *maio_devs[32];
+static	unsigned default_dev_idx = -1;
 
 DEFINE_PER_CPU(struct percpu_maio_qp, maio_qp);
 /*
@@ -353,7 +334,7 @@ int maio_post_rx_page(void *addr, u32 len)
 		return 0;
 	}
 
-	if (qp->rx_ring[qp->rx_counter]) {
+	if (qp->rx_ring[qp->rx_counter & (qp->rx_sz -1)]) {
 		trace_printk("[%d]User to slow. dropping post of %llx:%llx\n",
 				smp_processor_id(), (u64)addr, addr2uaddr(addr));
 		return 0;
@@ -386,6 +367,166 @@ int maio_post_rx_page(void *addr, u32 len)
 }
 EXPORT_SYMBOL(maio_post_rx_page);
 
+//pktgen xmit
+int maio_xmit(struct net_device *dev, struct sk_buff *skb, bool more)
+{
+	int err = 0;
+        struct netdev_queue *txq = netdev_get_tx_queue(dev, smp_processor_id());
+
+	if (unlikely(!skb)) {
+		err = -ENOMEM;
+                goto unlock;
+        }
+        local_bh_disable();
+
+        HARD_TX_LOCK(dev, txq, smp_processor_id());
+
+        if (unlikely(netif_xmit_frozen_or_drv_stopped(txq))) {
+		err = -EBUSY;
+                goto unlock;
+        }
+        //refcount_add(burst, &pkt_dev->skb->users);
+
+//xmit_more:
+        err = netdev_start_xmit(skb, dev, txq, more);
+	if (unlikely(err != NETDEV_TX_OK)) {
+		pr_err("netdev_start_xmit failed with %0xx\n", err);
+	}
+#if 0
+        switch (ret) {
+        case NETDEV_TX_OK:
+                pkt_dev->last_ok = 1;
+                pkt_dev->sofar++;
+                pkt_dev->seq_num++;
+                pkt_dev->tx_bytes += pkt_dev->last_pkt_size;
+                if (burst > 0 && !netif_xmit_frozen_or_drv_stopped(txq))
+                        goto xmit_more;
+                break;
+        case NET_XMIT_DROP:
+        case NET_XMIT_CN:
+                /* skb has been consumed */
+                pkt_dev->errors++;
+                break;
+        default: /* Drivers are not supposed to return other values! */
+                net_info_ratelimited("%s xmit error: %d\n",
+                                     pkt_dev->odevname, ret);
+                pkt_dev->errors++;
+                fallthrough;
+        case NETDEV_TX_BUSY:
+                /* Retry it next time */
+                refcount_dec(&(pkt_dev->skb->users));
+                pkt_dev->last_ok = 0;
+        }
+#endif
+
+unlock:
+        HARD_TX_UNLOCK(dev, txq);
+
+//out:
+        local_bh_enable();
+
+	return err;
+}
+
+#define tx_ring_entry(qp) 	(qp)->tx_ring[(qp)->tx_counter & ((qp)->tx_sz -1)]
+#define advance_tx_ring(qp)	(qp)->tx_ring[(qp)->tx_counter++ & ((qp)->tx_sz -1)] = 0
+
+int maio_post_tx_page(void)
+{
+	struct io_md *md;
+	struct percpu_maio_qp *qp = this_cpu_ptr(&maio_qp);
+	int copy = 0;
+	u64 uaddr = 0;
+	static unsigned tx_counter;
+
+	/* NOTICE: This works only for a single TX - no concurency!!! AND a single TX Ring */
+	(qp)->tx_counter = tx_counter;
+
+	while ((uaddr = tx_ring_entry(qp))) {
+		unsigned len;
+		void *kaddr = uaddr2addr(mtt, uaddr);
+
+		advance_tx_ring(qp);
+
+		if (unlikely(!is_maio_page(virt_to_page(kaddr)))) {
+#if 0
+	#TODO: Add the copy option.
+			char *buff = alloc_copy_buff(qp);
+			if (!buff) {
+				pr_err("Failed to alloc copy_buff!!!\n");
+				return 0;
+			}
+			memcpy(buff, kaddr, len);
+			kaddr = buff;
+			copy = 1;
+#endif
+			pr_err("NON MAIO page sent [%llx]\n", uaddr);
+			continue;
+		}
+		md = kaddr;
+		md--;
+
+		if (unlikely(md->poison == MAIO_POISON)) {
+			pr_err("NON MAIO page sent [%llx]\n", uaddr);
+			continue;
+		}
+//TODO: Consider adding ERR flags to ring entry.
+
+		len = md->len + SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
+
+		if (unlikely(((uaddr & (PAGE_SIZE -1)) + len) > PAGE_SIZE)) {
+			pr_err("Buffer to Long [%llx] len %u klen = %u\n", uaddr, md->len, len);
+			continue;
+		}
+		get_page(virt_to_page(kaddr));
+		maio_xmit(maio_devs[default_dev_idx],build_skb(kaddr, md->len), tx_ring_entry(qp));
+	}
+
+	tx_counter = qp->tx_counter;
+
+	return 0;
+}
+
+#define MAIO_TX_KBUFF_SZ	64
+
+static inline ssize_t maio_tx(struct file *file, const char __user *buf,
+                                    size_t size, loff_t *_pos)
+{	char	kbuff[MAIO_TX_KBUFF_SZ], *cur;
+	size_t 	val;
+	static size_t prev = -1;
+
+	if (unlikely(!maio_configured))
+		return -ENODEV;
+
+	if (unlikely(!global_maio_matrix)) {
+		pr_err("global matrix not configured!!!");
+		return -ENODEV;
+	}
+
+	if (unlikely(size < 1 || size >= MAIO_TX_KBUFF_SZ))
+	        return -EINVAL;
+
+	if (copy_from_user(kbuff, buf, size)) {
+		return -EFAULT;
+	}
+
+	val 	= simple_strtoull(kbuff, &cur, 10);
+
+	/* Make sure the I/O was posted on the correct Ring */
+	if (unlikely(val =! smp_processor_id())) {
+		trace_printk("%s: WARNING Sender Usess wrong Core ID: [%ld] Core %d\n", __FUNCTION__, val, smp_processor_id());
+	}
+
+	if (unlikely(prev == smp_processor_id())) {
+		trace_printk("%s: WARNING Sender switched Cores: [%ld] Core %d\n", __FUNCTION__, prev, smp_processor_id());
+		prev = smp_processor_id();
+	}
+
+	maio_post_tx_page();
+	return size;
+}
+
+
 static inline ssize_t maio_enable(struct file *file, const char __user *buf,
                                     size_t size, loff_t *_pos)
 {	char	*kbuff, *cur;
@@ -400,12 +541,24 @@ static inline ssize_t maio_enable(struct file *file, const char __user *buf,
 
 	val 	= simple_strtoull(kbuff, &cur, 10);
 	pr_err("%s: Got: [%ld] was %d\n", __FUNCTION__, val, maio_configured);
+
+	kfree(kbuff);
+
 	if (val == 0 || val == 1)
 		maio_configured = val;
 	else
 		return -EINVAL;
 
 	return size;
+}
+
+/*x86/boot/string.c*/
+static unsigned int atou(const char *s)
+{
+	unsigned int i = 0;
+	while (isdigit(*s))
+		i = i * 10 + (*s++ - '0');
+	return i;
 }
 
 static inline ssize_t init_user_rings(struct file *file, const char __user *buf,
@@ -415,6 +568,7 @@ static inline ssize_t init_user_rings(struct file *file, const char __user *buf,
 	void 	*kbase;
 	size_t 	len;
 	long 	rc = 0, i;
+	unsigned dev_idx = -1;
 	u64	base;
 
 	if (size <= 1 || size >= PAGE_SIZE)
@@ -424,9 +578,18 @@ static inline ssize_t init_user_rings(struct file *file, const char __user *buf,
 	if (IS_ERR(kbuff))
 	        return PTR_ERR(kbuff);
 
-	base 	= simple_strtoull(kbuff, &cur, 16);
-	len	= simple_strtol(cur + 1, &cur, 10);
-	pr_err("%s: Got: [0x%llx: %ld]\n", __FUNCTION__, base, len);
+	base 		= simple_strtoull(kbuff, &cur, 16);
+	len		= simple_strtol(cur + 1, &cur, 10);
+	dev_idx 	= atou(cur + 1);
+
+	pr_err("%s: Got: [0x%llx: %ld] dev idx %u\n", __FUNCTION__, base, len, dev_idx);
+	if ( dev_idx > 31)
+		return -EINVAL;
+
+	if ( !(maio_devs[i] = dev_get_by_index(&init_net, dev_idx)))
+		return -ENODEV;
+
+	default_dev_idx = dev_idx;
 
 	kbase = uaddr2addr(mtt, base);
 	if (!kbase) {
@@ -461,7 +624,8 @@ static inline ssize_t init_user_rings(struct file *file, const char __user *buf,
 		qp->rx_sz = global_maio_matrix->info.nr_rx_sz;
 		qp->tx_sz = global_maio_matrix->info.nr_tx_sz;
 		qp->rx_ring = uaddr2addr(mtt, global_maio_matrix->info.rx_rings[i]);
-		qp->tx_ring = uaddr2addr(mtt, global_maio_matrix->info.tx_rings[i]);
+		/* TODO: Singe TX ring  NOTICE: each Ring has a different counter... */
+		qp->tx_ring = uaddr2addr(mtt, global_maio_matrix->info.tx_rings[0]);
 	}
 
 	return size;
@@ -614,6 +778,12 @@ static ssize_t maio_enable_write(struct file *file,
         return maio_enable(file, buffer, count, pos);
 }
 
+static ssize_t maio_tx_write(struct file *file,
+                const char __user *buffer, size_t count, loff_t *pos)
+{
+        return maio_tx(file, buffer, count, pos);
+}
+
 static int maio_enable_show(struct seq_file *m, void *v)
 {
 	seq_printf(m, "%d\n", maio_configured ? 1 : 0);
@@ -684,6 +854,14 @@ static const struct proc_ops maio_enable_ops = {
         .proc_write     = maio_enable_write,
 };
 
+static const struct proc_ops maio_tx_ops = {
+        .proc_open      = maio_map_open,
+        .proc_read      = seq_read,
+        .proc_lseek     = seq_lseek,
+        .proc_release   = single_release,
+        .proc_write     = maio_tx_write,
+};
+
 static inline void proc_init(void)
 {
 	maio_dir = proc_mkdir_mode("maio", 00555, NULL);
@@ -692,6 +870,7 @@ static inline void proc_init(void)
 	proc_create_data("pages", 00666, maio_dir, &maio_page_ops, NULL);
 	proc_create_data("pages_0", 00666, maio_dir, &maio_page_0_ops, NULL);
 	proc_create_data("enable", 00666, maio_dir, &maio_enable_ops, NULL);
+	proc_create_data("tx", 00666, maio_dir, &maio_enable_ops, NULL);
 }
 
 static __init int maio_init(void)
