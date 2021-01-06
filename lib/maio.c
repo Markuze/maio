@@ -7,6 +7,7 @@
 #include <linux/string.h>
 #include <linux/netdevice.h>
 #include <linux/ctype.h> /*isdigit*/
+#include <linux/ip.h>	/*iphdr*/
 
 #ifndef assert
 #define assert(expr) 	do { \
@@ -94,6 +95,7 @@ static inline u64 addr2uaddr(void *addr)
 	u64 offset = (u64)addr;
 	offset &=  HUGE_OFFSET;
 
+	assert(is_maio_page(virt_to_page(addr)));
 	return get_maio_uaddr(virt_to_head_page(addr)) + offset;
 }
 
@@ -260,7 +262,7 @@ struct page *maio_alloc_pages(size_t order)
 	}
 	assert(buffer != NULL);//should not happen
 	page =  (buffer) ? virt_to_page(buffer) : ERR_PTR(-ENOMEM);
-	if (likely(page)) {
+	if (likely( ! IS_ERR_OR_NULL(page))) {
 		if (!(page_ref_count(page) == 0)) {
 			trace_printk("%d:%s:%llx :%s\n", smp_processor_id(), __FUNCTION__, (u64)page, PageHead(page)?"HEAD":"");
 			trace_printk("%d:%s:%llx[%d]%llx\n", smp_processor_id(),
@@ -309,27 +311,42 @@ static inline char* alloc_copy_buff(struct percpu_maio_qp *qp)
 	if (qp->cached_mbuf) {
 		data = qp->cached_mbuf;
 		qp->cached_mbuf = NULL;
+		/*TODO: ASSERT on Refcount values...*/
 	} else {
-		struct page *page = maio_get_cached_head();
-		if (!page)
-			page = maio_alloc_page();
-		if (!page)
+		void *buffer = mag_alloc_elem(&global_maio.mag[order2idx(0)]);
+		struct page *page;
+
+		if (!buffer)
 			return NULL;
-		data = page_address(page) + maio_get_page_headroom(NULL);
+
+		page = virt_to_page(buffer);
+		/* get_page as this page will houses two mbufs */
+		get_page(page);
+		data = buffer + maio_get_page_headroom(NULL);
 		qp->cached_mbuf = data + maio_get_page_stride(NULL);
 	}
 	return data;
 }
 
+static inline int filter_packet(void *addr)
+{
+	struct ethhdr	*eth 	= addr;
+	struct iphdr	*iphdr	= (struct iphdr	*)&eth[1];
+
+	trace_printk("SIP: %pI4 N[%x] DIP: %pI4 N[%x]\n", &iphdr->saddr, iphdr->saddr, &iphdr->daddr, iphdr->daddr);
+	return 0;
+}
+
 int maio_post_rx_page(void *addr, u32 len)
 {
+	struct page* page = virt_to_page(addr);
 	struct io_md *md;
 	struct percpu_maio_qp *qp = this_cpu_ptr(&maio_qp);
-	int copy = 0;
+	int copy = 0, rc;
 
-	if (!maio_configured)
+	if (unlikely(!maio_configured))
 		return 0;
-	if (!global_maio_matrix) {
+	if (unlikely(!global_maio_matrix)) {
 		pr_err("global matrix not configured!!!");
 		return 0;
 	}
@@ -340,7 +357,15 @@ int maio_post_rx_page(void *addr, u32 len)
 		return 0;
 	}
 
-	if (!is_maio_page(virt_to_page(addr))) {
+	rc = filter_packet(addr);
+	/**
+		skip packet...
+		if (rc == 0)
+			return 0;
+		...
+		return 1;
+	*/
+	//if (!is_maio_page(virt_to_page(addr))) {
 		char *buff = alloc_copy_buff(qp);
 		if (!buff) {
 			pr_err("Failed to alloc copy_buff!!!\n");
@@ -349,11 +374,11 @@ int maio_post_rx_page(void *addr, u32 len)
 		memcpy(buff, addr, len);
 		addr = buff;
 		copy = 1;
+	//}
 
-	}
-	trace_printk("%d:Posting[%lu] %s:%llx[%u]%llx\n", smp_processor_id(),
+	trace_printk("%d:Posting[%lu] %s:%llx[%u]%llx %s\n", smp_processor_id(),
 			qp->rx_counter & (qp->rx_sz -1), copy ? "COPY" : "ZC",
-			(u64)addr, len, addr2uaddr(addr));
+			(u64)addr, len, addr2uaddr(addr), (rc) ? "MAIO RX":"PT" );
 	md = addr;
 	md--;
 	md->len 	= len;
@@ -467,7 +492,7 @@ int maio_post_tx_page(void)
 		md--;
 
 		if (unlikely(md->poison == MAIO_POISON)) {
-			pr_err("NON MAIO page sent [%llx]\n", uaddr);
+			pr_err("NO MAIO-POISON Found [%llx]\n", uaddr);
 			continue;
 		}
 //TODO: Consider adding ERR flags to ring entry.
@@ -479,7 +504,7 @@ int maio_post_tx_page(void)
 			continue;
 		}
 		get_page(virt_to_page(kaddr));
-		maio_xmit(maio_devs[default_dev_idx],build_skb(kaddr, md->len), tx_ring_entry(qp));
+		maio_xmit(maio_devs[default_dev_idx], build_skb(kaddr, md->len), tx_ring_entry(qp));
 	}
 
 	tx_counter = qp->tx_counter;
