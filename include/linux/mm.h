@@ -953,6 +953,8 @@ static inline void maio_get_page(struct page *page)
 
 static inline void set_maio_uaddr(struct page *page, u64 uaddr)
 {
+	if (page[1].uaddr)
+		pr_err("Double call to set_maio_uaddr was %lx now %llx\n", page[1].uaddr, uaddr);
 	page[1].uaddr = uaddr;
 }
 

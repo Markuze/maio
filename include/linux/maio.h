@@ -2,6 +2,7 @@
 #define  __MAIO__H
 
 #include <linux/magazine.h>
+#include <linux/rbtree.h>
 
 #define NUM_MAIO_SIZES	1
 #define HUGE_ORDER	9 /* compound_order of 2MB HP */
@@ -62,6 +63,7 @@ struct maio_cached_buffer {
 };
 
 struct umem_region_mtt {
+	struct rb_node node;
 	u64 start;	/* userland start region [*/
 	u64 end;	/* userland end region   ]*/
 	int len;	/* Number of HP */
