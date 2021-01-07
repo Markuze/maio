@@ -445,6 +445,7 @@ int maio_post_rx_page(void *addr, u32 len)
 EXPORT_SYMBOL(maio_post_rx_page);
 
 //pktgen xmit
+//TODO: Loop inside lock
 int maio_xmit(struct net_device *dev, struct sk_buff *skb, bool more)
 {
 	int err = 0;
@@ -467,7 +468,7 @@ int maio_xmit(struct net_device *dev, struct sk_buff *skb, bool more)
 //xmit_more:
         err = netdev_start_xmit(skb, dev, txq, more);
 	if (unlikely(err != NETDEV_TX_OK)) {
-		pr_err("netdev_start_xmit failed with %0xx\n", err);
+		trace_printk("netdev_start_xmit failed with %0xx\n", err);
 	}
 #if 0
         switch (ret) {
@@ -752,8 +753,8 @@ static inline ssize_t maio_add_pages_0(struct file *file, const char __user *buf
 				(u64)page, page_ref_count(page));
 			maio_cache_head(page);
 		} else {
-			trace_printk("[%ld]Adding %llx [%llx]  - P %llx[%d]\n", len, (u64 )kbase, meta->bufs[len],
-					(u64)page, page_ref_count(page));
+			//trace_printk("[%ld]Adding %llx [%llx]  - P %llx[%d]\n", len, (u64 )kbase, meta->bufs[len],
+			//		(u64)page, page_ref_count(page));
 			set_page_count(page, 0);
 
 			assert(get_maio_elem_order(__compound_head(page, 0)) == 0);
