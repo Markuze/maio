@@ -146,7 +146,8 @@ static inline u64 addr2uaddr(void *addr)
 	u64 offset = (u64)addr;
 	offset &=  HUGE_OFFSET;
 
-	assert(is_maio_page(virt_to_page(addr)));
+	if (unlikely(!is_maio_page(virt_to_page(addr))))
+		return 0;
 	return get_maio_uaddr(virt_to_head_page(addr)) + offset;
 }
 
@@ -524,6 +525,12 @@ int maio_post_tx_page(void)
 		unsigned len;
 		void *kaddr = uaddr2addr(uaddr);
 
+		if (unlikely(IS_ERR_OR_NULL(kaddr))) {
+			trace_printk("Invalid kaddr %llx from user %llx\n", (u64)kaddr, (u64)uaddr);
+			pr_err("Invalid kaddr %llx from user %llx\n", (u64)kaddr, (u64)uaddr);
+			continue;
+		}
+		trace_printk("Sending kaddr %llx from user %llx\n", (u64)kaddr, (u64)uaddr);
 		advance_tx_ring(qp);
 
 		if (unlikely(!is_maio_page(virt_to_page(kaddr)))) {
