@@ -115,6 +115,7 @@ static inline bool add_mtt(struct umem_region_mtt *mtt)
 	rb_link_node(&mtt->node, parent, new);
 	rb_insert_color(&mtt->node, &mtt_tree);
 
+	trace_printk("%s [%llx - %llx)\n",__FUNCTION__, mtt->start, mtt->end);
 	return true;
 }
 
@@ -385,7 +386,13 @@ static inline int filter_packet(void *addr)
 	struct ethhdr	*eth 	= addr;
 	struct iphdr	*iphdr	= (struct iphdr	*)&eth[1];
 
+	/* network byte order of loader machine */
+	int trgt = (10|5<<8|3<<16|6<<24);
+
 	trace_printk("SIP: %pI4 N[%x] DIP: %pI4 N[%x]\n", &iphdr->saddr, iphdr->saddr, &iphdr->daddr, iphdr->daddr);
+
+	if (trgt == iphdr->saddr)
+		return 1;
 	return 0;
 }
 
@@ -410,15 +417,12 @@ int maio_post_rx_page(void *addr, u32 len)
 		return 0;
 	}
 
-	rc = filter_packet(addr);
-	/**
-		skip packet...
-		if (rc == 0)
-			return 0;
-		...
-		return 1;
-	*/
-	//if (!is_maio_page(virt_to_page(addr))) {
+	if (!(rc = filter_packet(addr))) {
+		trace_printk("skiping...\n");
+		return 0;
+	}
+
+	if (!is_maio_page(virt_to_page(addr))) {
 		char *buff = alloc_copy_buff(qp);
 		if (!buff) {
 			pr_err("Failed to alloc copy_buff!!!\n");
@@ -427,11 +431,17 @@ int maio_post_rx_page(void *addr, u32 len)
 		memcpy(buff, addr, len);
 		addr = buff;
 		copy = 1;
-	//}
+		/* the orig copy is not used so ignore */
+	} else {
+		/* We are using it so get*/
+		get_page(page);
+	}
 
-	trace_printk("%d:Posting[%lu] %s:%llx[%u]%llx %s\n", smp_processor_id(),
+	assert(uaddr2addr(addr2uaddr(addr)) == addr);
+	trace_printk("%d:Posting[%lu] %s:%llx[%u]%llx{%d} %s\n", smp_processor_id(),
 			qp->rx_counter & (qp->rx_sz -1), copy ? "COPY" : "ZC",
-			(u64)addr, len, addr2uaddr(addr), (rc) ? "MAIO RX":"PT" );
+			(u64)addr, len, addr2uaddr(addr), page_ref_count(virt_to_page(addr)),
+			(rc) ? "MAIO RX":"PT" );
 	md = addr;
 	md--;
 	md->len 	= len;
@@ -439,14 +449,13 @@ int maio_post_rx_page(void *addr, u32 len)
 
 	qp->rx_ring[qp->rx_counter & (qp->rx_sz -1)] = addr2uaddr(addr);
 	++qp->rx_counter;
-	//return 1; TODO: When buffer taken. put page of orig.
-
-	return 0;
+	return 1; //TODO: When buffer taken. put page of orig.
 }
 EXPORT_SYMBOL(maio_post_rx_page);
 
 //pktgen xmit
 //TODO: Loop inside lock
+// use dev_direct_xmit / xsk_generic_xmit
 int maio_xmit(struct net_device *dev, struct sk_buff *skb, bool more)
 {
 	int err = 0;
@@ -470,6 +479,7 @@ int maio_xmit(struct net_device *dev, struct sk_buff *skb, bool more)
         err = netdev_start_xmit(skb, dev, txq, more);
 	if (unlikely(err != NETDEV_TX_OK)) {
 		trace_printk("netdev_start_xmit failed with %0xx\n", err);
+		consume_skb(skb);
 	}
 #if 0
         switch (ret) {
@@ -522,7 +532,8 @@ int maio_post_tx_page(void)
 	(qp)->tx_counter = tx_counter;
 
 	while ((uaddr = tx_ring_entry(qp))) {
-		unsigned len;
+		struct sk_buff *skb;
+		unsigned len, size;
 		void *kaddr = uaddr2addr(uaddr);
 
 		if (unlikely(IS_ERR_OR_NULL(kaddr))) {
@@ -530,7 +541,6 @@ int maio_post_tx_page(void)
 			pr_err("Invalid kaddr %llx from user %llx\n", (u64)kaddr, (u64)uaddr);
 			continue;
 		}
-		trace_printk("Sending kaddr %llx from user %llx\n", (u64)kaddr, (u64)uaddr);
 		advance_tx_ring(qp);
 
 		if (unlikely(!is_maio_page(virt_to_page(kaddr)))) {
@@ -558,14 +568,21 @@ int maio_post_tx_page(void)
 		}
 //TODO: Consider adding ERR flags to ring entry.
 
-		len = md->len + SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
+		len 	= md->len + SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
+		size 	= 0x800 - ((u64)kaddr & (0x800 -1));
+		trace_printk("Sending kaddr %llx [%d]from user %llx: len %d[size %d] poison %0x\n",
+				(u64)kaddr, page_ref_count(virt_to_page(kaddr)),
+				(u64)uaddr, md->len, size, md->poison);
 
 		if (unlikely(((uaddr & (PAGE_SIZE -1)) + len) > PAGE_SIZE)) {
 			pr_err("Buffer to Long [%llx] len %u klen = %u\n", uaddr, md->len, len);
 			continue;
 		}
+		skb = build_skb(kaddr, size);//TODO:
+		skb_put(skb, md->len);
+		skb->dev = maio_devs[default_dev_idx];
 		//get_page(virt_to_page(kaddr));
-		maio_xmit(maio_devs[default_dev_idx], build_skb(kaddr, md->len), tx_ring_entry(qp));
+		maio_xmit(maio_devs[default_dev_idx], skb, tx_ring_entry(qp));
 	}
 
 	trace_printk("%d: Sent buffers. counter %d\n", smp_processor_id(), tx_counter);
@@ -674,10 +691,11 @@ static inline ssize_t init_user_rings(struct file *file, const char __user *buf,
 	if ( dev_idx > 31)
 		return -EINVAL;
 
-	if ( !(maio_devs[i] = dev_get_by_index(&init_net, dev_idx)))
+	if ( !(maio_devs[dev_idx] = dev_get_by_index(&init_net, dev_idx)))
 		return -ENODEV;
 
 	default_dev_idx = dev_idx;
+	trace_printk("device %s [%d]added\n", maio_devs[dev_idx]->name, dev_idx);
 
 	kbase = uaddr2addr(base);
 	if (!kbase) {
@@ -756,8 +774,8 @@ static inline ssize_t maio_add_pages_0(struct file *file, const char __user *buf
 			max_pages_0 = (u64)page;
 
 		if (PageHead(page)) {
-			trace_printk("[%ld]Caching %llx [%llx]  - P %llx[%d]\n", len, (u64 )kbase, meta->bufs[len],
-				(u64)page, page_ref_count(page));
+			//trace_printk("[%ld]Caching %llx [%llx]  - P %llx[%d]\n", len, (u64 )kbase, meta->bufs[len],
+			//	(u64)page, page_ref_count(page));
 			maio_cache_head(page);
 		} else {
 			//trace_printk("[%ld]Adding %llx [%llx]  - P %llx[%d]\n", len, (u64 )kbase, meta->bufs[len],
@@ -809,8 +827,8 @@ static inline ssize_t maio_map_page(struct file *file, const char __user *buf,
 	for (i = 0; i < len; i++) {
 		u64 uaddr = base + (i * HUGE_SIZE);
 		rc = get_user_pages(uaddr, (1 << HUGE_ORDER), FOLL_LONGTERM, &umem_pages[0], NULL);
-		trace_printk("[%ld]%llx[%llx:%d] \n", rc, uaddr, (unsigned long long)umem_pages[0],
-							compound_order(__compound_head(umem_pages[0], 0)));
+		//trace_printk("[%ld]%llx[%llx:%d] \n", rc, uaddr, (unsigned long long)umem_pages[0],
+		//					compound_order(__compound_head(umem_pages[0], 0)));
 
 		assert(compound_order(__compound_head(umem_pages[0], 0)) == HUGE_ORDER);
 		/*
@@ -829,8 +847,8 @@ static inline ssize_t maio_map_page(struct file *file, const char __user *buf,
 		/* Allow for the Allocator to get elements on demand, flexible support for variable sizes */
 		if (cache)
 			maio_cache_hp(umem_pages[0]);
-		trace_printk("Added %llx:%llx (umem %llx:%llx)to MAIO\n", uaddr, (u64)page_address(umem_pages[0]),
-					get_maio_uaddr(umem_pages[0]), (u64)uaddr2addr(uaddr));
+		//trace_printk("Added %llx:%llx (umem %llx:%llx)to MAIO\n", uaddr, (u64)page_address(umem_pages[0]),
+		//			get_maio_uaddr(umem_pages[0]), (u64)uaddr2addr(uaddr));
 	}
 	pr_err("%d: %s maio_maped U[%llx-%llx) K:[%llx-%llx)\n", smp_processor_id(), __FUNCTION__, mtt->start, mtt->end,
 			(u64)uaddr2addr(mtt->start), (u64)uaddr2addr(mtt->end));
