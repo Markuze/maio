@@ -91,6 +91,7 @@ struct percpu_maio_qp {
 
 u16 maio_get_page_headroom(struct page *page);
 int maio_post_rx_page(void *addr, u32 len);
+int maio_post_rx_page_copy(void *addr, u32 len);
 void maio_frag_free(void *addr);
 void maio_page_free(struct page *page);
 void *maio_kalloc(void);

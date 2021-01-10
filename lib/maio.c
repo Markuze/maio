@@ -13,6 +13,8 @@
 #ifndef assert
 #define assert(expr) 	do { \
 				if (unlikely(!(expr))) { \
+					trace_printk("Assertion failed! %s, %s, %s, line %d\n", \
+						   #expr, __FILE__, __func__, __LINE__); \
 					pr_alert("Assertion failed! %s, %s, %s, line %d\n", \
 						   #expr, __FILE__, __func__, __LINE__); \
 					panic("ASSERT FAILED: %s (%s)", __FUNCTION__, #expr); \
@@ -371,8 +373,17 @@ static inline char* alloc_copy_buff(struct percpu_maio_qp *qp)
 
 		if (!buffer)
 			return NULL;
-
 		page = virt_to_page(buffer);
+
+		if (!(page_ref_count(page) == 0)) {
+			trace_printk("%d:%s:%llx :%s\n", smp_processor_id(), __FUNCTION__, (u64)page, PageHead(page)?"HEAD":"");
+			trace_printk("%d:%s:%llx[%d]%llx\n", smp_processor_id(),
+					__FUNCTION__, (u64)page, page_ref_count(page), (u64)page_address(page));
+			panic("P %llx: %llx  has %d refcnt\n", (u64)page, (u64)page_address(page), page_ref_count(page));
+		}
+		assert(is_maio_page(page));
+		init_page_count(page);
+
 		/* get_page as this page will houses two mbufs */
 		get_page(page);
 		data = buffer + maio_get_page_headroom(NULL);
@@ -387,7 +398,7 @@ static inline int filter_packet(void *addr)
 	struct iphdr	*iphdr	= (struct iphdr	*)&eth[1];
 
 	/* network byte order of loader machine */
-	int trgt = (10|5<<8|3<<16|6<<24);
+	int trgt = (10|5<<8|3<<16|4<<24);
 
 	trace_printk("SIP: %pI4 N[%x] DIP: %pI4 N[%x]\n", &iphdr->saddr, iphdr->saddr, &iphdr->daddr, iphdr->daddr);
 
@@ -396,15 +407,16 @@ static inline int filter_packet(void *addr)
 	return 0;
 }
 
-int maio_post_rx_page(void *addr, u32 len)
+static inline int __maio_post_rx_page(void *addr, u32 len, int copy)
 {
 	struct page* page = virt_to_page(addr);
 	struct io_md *md;
 	struct percpu_maio_qp *qp = this_cpu_ptr(&maio_qp);
-	int copy = 0, rc;
+	int rc;
 
 	if (unlikely(!maio_configured))
 		return 0;
+
 	if (unlikely(!global_maio_matrix)) {
 		pr_err("global matrix not configured!!!");
 		return 0;
@@ -422,15 +434,18 @@ int maio_post_rx_page(void *addr, u32 len)
 		return 0;
 	}
 
-	if (!is_maio_page(virt_to_page(addr))) {
+	trace_printk("using page %llx addr %llx, len %d [%d]\n", (u64)page, (u64)addr, len, copy);
+	if (copy) {
 		char *buff = alloc_copy_buff(qp);
 		if (!buff) {
-			pr_err("Failed to alloc copy_buff!!!\n");
+			trace_printk("Failed to alloc copy_buff!!!\n");
 			return 0;
 		}
+		page = virt_to_page(buff);
 		memcpy(buff, addr, len);
 		addr = buff;
-		copy = 1;
+		trace_printk("copy to using page %llx addr %llx\n", (u64)page, (u64)addr);
+
 		/* the orig copy is not used so ignore */
 	} else {
 		/* We are using it so get*/
@@ -439,8 +454,10 @@ int maio_post_rx_page(void *addr, u32 len)
 
 	assert(uaddr2addr(addr2uaddr(addr)) == addr);
 	trace_printk("%d:Posting[%lu] %s:%llx[%u]%llx{%d} %s\n", smp_processor_id(),
-			qp->rx_counter & (qp->rx_sz -1), copy ? "COPY" : "ZC",
-			(u64)addr, len, addr2uaddr(addr), page_ref_count(virt_to_page(addr)),
+			qp->rx_counter & (qp->rx_sz -1),
+			copy ? "COPY" : "ZC",
+			(u64)addr, len,
+			addr2uaddr(addr), page_ref_count(page),
 			(rc) ? "MAIO RX":"PT" );
 	md = addr;
 	md--;
@@ -450,6 +467,18 @@ int maio_post_rx_page(void *addr, u32 len)
 	qp->rx_ring[qp->rx_counter & (qp->rx_sz -1)] = addr2uaddr(addr);
 	++qp->rx_counter;
 	return 1; //TODO: When buffer taken. put page of orig.
+}
+
+int maio_post_rx_page_copy(void *addr, u32 len)
+{
+	__maio_post_rx_page(addr, len, 1);
+}
+EXPORT_SYMBOL(maio_post_rx_page_copy);
+
+int maio_post_rx_page(void *addr, u32 len)
+{
+	struct page* page = virt_to_page(addr);
+	__maio_post_rx_page(addr, len, !is_maio_page(page));
 }
 EXPORT_SYMBOL(maio_post_rx_page);
 
