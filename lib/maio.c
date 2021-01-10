@@ -23,6 +23,12 @@
 
 #endif
 
+#if defined MAIO_DEBUG
+#define trace_debug trace_printk
+#else
+#define trace_debug(...)
+#endif
+
 /* GLOBAL MAIO FLAG*/
 volatile bool maio_configured;
 EXPORT_SYMBOL(maio_configured);
@@ -402,7 +408,7 @@ static inline int filter_packet(void *addr)
 
 
 	if (trgt == iphdr->saddr) {
-		trace_printk("SIP: %pI4 N[%x] DIP: %pI4 N[%x]\n", &iphdr->saddr, iphdr->saddr, &iphdr->daddr, iphdr->daddr);
+		trace_debug("SIP: %pI4 N[%x] DIP: %pI4 N[%x]\n", &iphdr->saddr, iphdr->saddr, &iphdr->daddr, iphdr->daddr);
 		return 1;
 	}
 	return 0;
@@ -435,7 +441,7 @@ static inline int __maio_post_rx_page(void *addr, u32 len, int copy)
 		return 0;
 	}
 
-	trace_printk("using page %llx addr %llx, len %d [%d]\n", (u64)page, (u64)addr, len, copy);
+	trace_debug("using page %llx addr %llx, len %d [%d]\n", (u64)page, (u64)addr, len, copy);
 	if (copy) {
 		char *buff = alloc_copy_buff(qp);
 		if (!buff) {
@@ -445,7 +451,7 @@ static inline int __maio_post_rx_page(void *addr, u32 len, int copy)
 		page = virt_to_page(buff);
 		memcpy(buff, addr, len);
 		addr = buff;
-		trace_printk("copy to using page %llx addr %llx\n", (u64)page, (u64)addr);
+		trace_debug("copy to using page %llx addr %llx\n", (u64)page, (u64)addr);
 
 		/* the orig copy is not used so ignore */
 	} else {
@@ -462,7 +468,7 @@ static inline int __maio_post_rx_page(void *addr, u32 len, int copy)
 	qp->rx_ring[qp->rx_counter & (qp->rx_sz -1)] = addr2uaddr(addr);
 	++qp->rx_counter;
 
-	trace_printk("%d:Posting[%lu] %s:%llx[%u]%llx{%d} %s\n", smp_processor_id(),
+	trace_debug("%d:Posting[%lu] %s:%llx[%u]%llx{%d} %s\n", smp_processor_id(),
 			qp->rx_counter & (qp->rx_sz -1),
 			copy ? "COPY" : "ZC",
 			(u64)addr, len,
@@ -602,7 +608,7 @@ int maio_post_tx_page(void)
 
 		len 	= md->len + SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
 		size 	= 0x800 - ((u64)kaddr & (0x800 -1));
-		trace_printk("Sending kaddr %llx [%d]from user %llx: len %d[size %d] poison %0x\n",
+		trace_debug("Sending kaddr %llx [%d]from user %llx: len %d[size %d] poison %0x\n",
 				(u64)kaddr, page_ref_count(virt_to_page(kaddr)),
 				(u64)uaddr, md->len, size, md->poison);
 
@@ -617,7 +623,7 @@ int maio_post_tx_page(void)
 		maio_xmit(maio_devs[default_dev_idx], skb, tx_ring_entry(qp));
 	}
 
-	trace_printk("%d: Sent buffers. counter %d\n", smp_processor_id(), tx_counter);
+	trace_debug("%d: Sent buffers. counter %d\n", smp_processor_id(), tx_counter);
 	tx_counter = qp->tx_counter;
 
 	return 0;
@@ -648,11 +654,12 @@ static inline ssize_t maio_tx(struct file *file, const char __user *buf,
 
 	val 	= simple_strtoull(kbuff, &cur, 10);
 
+#if 0
 	/* Make sure the I/O was posted on the correct Ring */
 	if (unlikely(val =! smp_processor_id())) {
 		trace_printk("%s: WARNING Sender Usess wrong Core ID: [%ld] Core %d\n", __FUNCTION__, val, smp_processor_id());
 	}
-
+#endif
 	if (unlikely(prev == smp_processor_id())) {
 		trace_printk("%s: WARNING Sender switched Cores: [%ld] Core %d\n", __FUNCTION__, prev, smp_processor_id());
 		prev = smp_processor_id();
