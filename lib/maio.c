@@ -400,16 +400,17 @@ static inline int filter_packet(void *addr)
 	/* network byte order of loader machine */
 	int trgt = (10|5<<8|3<<16|4<<24);
 
-	trace_printk("SIP: %pI4 N[%x] DIP: %pI4 N[%x]\n", &iphdr->saddr, iphdr->saddr, &iphdr->daddr, iphdr->daddr);
 
-	if (trgt == iphdr->saddr)
+	if (trgt == iphdr->saddr) {
+		trace_printk("SIP: %pI4 N[%x] DIP: %pI4 N[%x]\n", &iphdr->saddr, iphdr->saddr, &iphdr->daddr, iphdr->daddr);
 		return 1;
+	}
 	return 0;
 }
 
 static inline int __maio_post_rx_page(void *addr, u32 len, int copy)
 {
-	struct page* page = virt_to_page(addr);
+	struct page *page = virt_to_page(addr);
 	struct io_md *md;
 	struct percpu_maio_qp *qp = this_cpu_ptr(&maio_qp);
 	int rc;
@@ -430,7 +431,7 @@ static inline int __maio_post_rx_page(void *addr, u32 len, int copy)
 	}
 
 	if (!(rc = filter_packet(addr))) {
-		trace_printk("skiping...\n");
+		//trace_printk("skiping...\n");
 		return 0;
 	}
 
@@ -453,12 +454,6 @@ static inline int __maio_post_rx_page(void *addr, u32 len, int copy)
 	}
 
 	assert(uaddr2addr(addr2uaddr(addr)) == addr);
-	trace_printk("%d:Posting[%lu] %s:%llx[%u]%llx{%d} %s\n", smp_processor_id(),
-			qp->rx_counter & (qp->rx_sz -1),
-			copy ? "COPY" : "ZC",
-			(u64)addr, len,
-			addr2uaddr(addr), page_ref_count(page),
-			(rc) ? "MAIO RX":"PT" );
 	md = addr;
 	md--;
 	md->len 	= len;
@@ -466,19 +461,27 @@ static inline int __maio_post_rx_page(void *addr, u32 len, int copy)
 
 	qp->rx_ring[qp->rx_counter & (qp->rx_sz -1)] = addr2uaddr(addr);
 	++qp->rx_counter;
+
+	trace_printk("%d:Posting[%lu] %s:%llx[%u]%llx{%d} %s\n", smp_processor_id(),
+			qp->rx_counter & (qp->rx_sz -1),
+			copy ? "COPY" : "ZC",
+			(u64)addr, len,
+			addr2uaddr(addr), page_ref_count(page),
+			(rc) ? "MAIO RX":"PT" );
+
 	return 1; //TODO: When buffer taken. put page of orig.
 }
 
 int maio_post_rx_page_copy(void *addr, u32 len)
 {
-	__maio_post_rx_page(addr, len, 1);
+	return __maio_post_rx_page(addr, len, 1);
 }
 EXPORT_SYMBOL(maio_post_rx_page_copy);
 
 int maio_post_rx_page(void *addr, u32 len)
 {
 	struct page* page = virt_to_page(addr);
-	__maio_post_rx_page(addr, len, !is_maio_page(page));
+	return __maio_post_rx_page(addr, len, !is_maio_page(page));
 }
 EXPORT_SYMBOL(maio_post_rx_page);
 
