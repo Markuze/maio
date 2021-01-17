@@ -169,14 +169,22 @@ enum pageflags {
 
 struct page;	/* forward declaration */
 
-static inline struct page *compound_head(struct page *page)
+static inline struct page *__compound_head(struct page *page, int verbose)
 {
 	unsigned long head = READ_ONCE(page->compound_head);
 
-	if (unlikely(head & 1))
-		return (struct page *) (head - 1);
+	if (head & 1) {
+		struct page *hp =  (struct page *) (head - 1);
+		if (unlikely(verbose && hp[1].uaddr)) {
+			/*TODO: WTF warning? */
+			trace_printk("%pS:%s:%lx -> %lx\n", __builtin_return_address(0), __FUNCTION__,
+				(unsigned long)page, head -1);
+		}
+		return hp;
+	}
 	return page;
 }
+#define compound_head(p)	__compound_head(p, 0)
 
 static __always_inline int PageTail(struct page *page)
 {

@@ -27,6 +27,7 @@
 #include <linux/memremap.h>
 #include <linux/overflow.h>
 #include <linux/sizes.h>
+#include <linux/maio.h>
 
 struct mempolicy;
 struct anon_vma;
@@ -798,7 +799,75 @@ static inline unsigned int compound_order(struct page *page)
 static inline void set_compound_order(struct page *page, unsigned int order)
 {
 	page[1].compound_order = order;
+	page[1].compound_nr = 1U << order;
+
+	/* HACK: Dont see a reason to add a new API call - this is always need */
+	page[1].elem_order = 0;
+	page[1].uaddr = 0;
 }
+
+
+static inline void maio_put_page(struct page *page)
+{
+	//trace_printk("Page %llx [%d]\n", (u64)page, page_ref_count(page));
+	VM_BUG_ON_PAGE(page_ref_count(page) < 1, page);
+	VM_BUG_ON_PAGE(PageHead(page), page);
+	/*TODO: Need to find relevant head on multipage allocs*/
+	if (put_page_testzero(page))
+		maio_page_free(page);
+}
+
+static inline void maio_get_page(struct page *page)
+{
+	/*TODO: Need to find relevant head on multipage allocs*/
+	//trace_printk("Page %llx [%d]\n", (u64)page, page_ref_count(page));
+	VM_BUG_ON_PAGE(page_ref_count(page) < 1, page);
+	VM_BUG_ON_PAGE(PageHead(page), page);
+	page_ref_inc(page);
+}
+
+static inline void set_maio_uaddr(struct page *page, u64 uaddr)
+{
+	if (page[1].uaddr)
+		pr_err("Double call to set_maio_uaddr was %lx now %llx\n", page[1].uaddr, uaddr);
+	page[1].uaddr = uaddr;
+}
+
+static inline u64 get_maio_uaddr(struct page *page)
+{
+	page = __compound_head(page, 0);
+	return page[1].uaddr;
+}
+
+static inline void set_maio_elem_order(struct page *page, unsigned int order)
+{
+	page[1].elem_order = order;
+}
+
+static inline u16 get_maio_elem_order(struct page *page)
+{
+	page = __compound_head(page, 0);
+	return page[1].elem_order;
+}
+
+static inline bool is_maio_page(struct page *page)
+{
+	if (!PageCompound(page))
+		return 0;
+
+	return (get_maio_uaddr(page)) ? 1 : 0;
+}
+
+static inline struct page *virt_to_head_maio_page(const void *x)
+{
+	struct page *page = virt_to_page(x);
+
+	/* TODO: Fix this API for multipage MAIO alloc */
+	if (is_maio_page(page))
+		return page;
+	return compound_head(page);
+}
+
 
 /* Returns the number of pages in this potentially compound page. */
 static inline unsigned long compound_nr(struct page *page)
@@ -1015,6 +1084,11 @@ static inline bool is_pci_p2pdma_page(const struct page *page)
 
 static inline void get_page(struct page *page)
 {
+	if (unlikely(is_maio_page(page))) {
+		maio_get_page(page);
+		return;
+	}
+
 	page = compound_head(page);
 	/*
 	 * Getting a normal page or the head of a compound page
@@ -1026,15 +1100,23 @@ static inline void get_page(struct page *page)
 
 static inline __must_check bool try_get_page(struct page *page)
 {
-	page = compound_head(page);
-	if (WARN_ON_ONCE(page_ref_count(page) <= 0))
-		return false;
-	page_ref_inc(page);
+	if (unlikely(is_maio_page(page))) {
+		maio_get_page(page);
+	} else {
+		page = compound_head(page);
+		if (WARN_ON_ONCE(page_ref_count(page) <= 0))
+			return false;
+		page_ref_inc(page);
+	}
 	return true;
 }
 
 static inline void put_page(struct page *page)
 {
+	if (is_maio_page(page)) {
+		maio_put_page(page);
+		return;
+	}
 	page = compound_head(page);
 
 	/*

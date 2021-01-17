@@ -75,6 +75,8 @@
 #include "internal.h"
 #include "shuffle.h"
 
+#include <linux/maio.h>
+
 /* prevent >1 _updater_ of zone percpu pageset ->high and ->batch fields */
 static DEFINE_MUTEX(pcp_batch_high_lock);
 #define MIN_PERCPU_PAGELIST_FRACTION	(8)
@@ -638,6 +640,9 @@ static void bad_page(struct page *page, const char *reason,
 
 	pr_alert("BUG: Bad page state in process %s  pfn:%05lx\n",
 		current->comm, page_to_pfn(page));
+	pr_alert("%llx [%llx] : %s\n",
+		(u64)page, (u64)compound_head(page),
+		is_maio_page(page) ? "MAIO":"PAGE_ALLOCATOR");
 	__dump_page(page, reason);
 	bad_flags &= page->flags;
 	if (bad_flags)
@@ -1050,6 +1055,8 @@ static void free_pages_check_bad(struct page *page)
 		bad_reason = "PAGE_FLAGS_CHECK_AT_FREE flag(s) set";
 		bad_flags = PAGE_FLAGS_CHECK_AT_FREE;
 	}
+	if (unlikely(is_maio_page(page)))
+		bad_reason = "Freeing MAIO Pages";
 #ifdef CONFIG_MEMCG
 	if (unlikely(page->mem_cgroup))
 		bad_reason = "page still charged to cgroup";
@@ -1102,6 +1109,12 @@ static int free_tail_pages_check(struct page *head_page, struct page *page)
 		}
 		break;
 	}
+
+	if (unlikely(is_maio_page(page))) {
+		bad_page(page, "Freeing MAIO Pages", 0);
+		goto out;
+	}
+
 	if (unlikely(!PageTail(page))) {
 		bad_page(page, "PageTail not set", 0);
 		goto out;
@@ -4815,7 +4828,10 @@ static inline void free_the_page(struct page *page, unsigned int order)
 	if (order == 0)		/* Via pcp? */
 		free_unref_page(page);
 	else
-		__free_pages_ok(page, order);
+		if (unlikely(is_maio_page(page)))
+			maio_page_free(page);
+		else
+			__free_pages_ok(page, order);
 }
 
 void __free_pages(struct page *page, unsigned int order)
@@ -4937,6 +4953,24 @@ void page_frag_free(void *addr)
 {
 	struct page *page = virt_to_head_page(addr);
 
+	if (is_maio_page(page)) {
+		page = virt_to_page(addr);
+		if (unlikely(put_page_testzero(page)))
+			maio_frag_free(addr);
+	/*	else
+			trace_printk("%d:%s:%llx[%d]\n", smp_processor_id(), __FUNCTION__,
+					(u64)page, page_ref_count(page));
+
+	*/
+		return;
+	}
+
+	/* Allow this, make sure refcounts are O.K -
+		Need to consider if page_refcount can be avoided?
+		Should happen _ONLY_ to kernel bound pages - then O.k;
+		1. elem is freed on prev line.
+		2. page ref is kept in order as MAIO always holds +1.
+	*/
 	if (unlikely(put_page_testzero(page)))
 		free_the_page(page, compound_order(page));
 }

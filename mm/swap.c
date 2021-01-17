@@ -76,6 +76,8 @@ static void __page_cache_release(struct page *page)
 
 static void __put_single_page(struct page *page)
 {
+	if (unlikely(is_maio_page(page)))
+		panic("WTF....\n?");
 	__page_cache_release(page);
 	mem_cgroup_uncharge(page);
 	free_unref_page(page);
@@ -91,6 +93,10 @@ static void __put_compound_page(struct page *page)
 	 * (it's never listed to any LRU lists) and no memcg routines should
 	 * be called for hugetlb (it has a separate hugetlb_cgroup.)
 	 */
+	if (unlikely(is_maio_page(page))) {
+		maio_page_free(page);
+		return;
+	}
 	if (!PageHuge(page))
 		__page_cache_release(page);
 	dtor = get_compound_page_dtor(page);

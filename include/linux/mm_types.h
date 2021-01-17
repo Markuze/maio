@@ -133,7 +133,11 @@ struct page {
 			/* First tail page only */
 			unsigned char compound_dtor;
 			unsigned char compound_order;
+			u16 elem_order;			/* Plug a 2B Hole*/
 			atomic_t compound_mapcount;
+			unsigned int compound_nr; /* 1 << compound_order *//*Added between 5.4-5.9 rm if 4B needed*/
+			/* 4B Hole*/
+			unsigned long uaddr;		/* Uaddr*/
 		};
 		struct {	/* Second tail page of compound page */
 			unsigned long _compound_pad_1;	/* compound_head */
