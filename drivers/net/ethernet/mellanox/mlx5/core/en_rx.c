@@ -35,6 +35,7 @@
 #include <linux/ipv6.h>
 #include <linux/tcp.h>
 #include <linux/indirect_call_wrapper.h>
+#include <linux/maio.h>
 #include <net/ip6_checksum.h>
 #include <net/page_pool.h>
 #include <net/inet_ecn.h>
@@ -240,17 +241,28 @@ static inline bool mlx5e_rx_cache_get(struct mlx5e_rq *rq,
 static inline int mlx5e_page_alloc_pool(struct mlx5e_rq *rq,
 					struct mlx5e_dma_info *dma_info)
 {
+/*
 	if (mlx5e_rx_cache_get(rq, dma_info))
 		return 0;
-
-	dma_info->page = page_pool_dev_alloc_pages(rq->page_pool);
+*/
+	if (likely(maio_configured)) {
+		dma_info->page = maio_alloc_page();
+	} else {
+		dma_info->page = page_pool_dev_alloc_pages(rq->page_pool);
+	}
 	if (unlikely(!dma_info->page))
 		return -ENOMEM;
-
+/*
+        trace_printk("%d:%s:%llx[%d]\n", smp_processor_id(), __FUNCTION__,
+			(u64)dma_info->page, page_ref_count(dma_info->page));
+*/
 	dma_info->addr = dma_map_page(rq->pdev, dma_info->page, 0,
 				      PAGE_SIZE, rq->buff.map_dir);
 	if (unlikely(dma_mapping_error(rq->pdev, dma_info->addr))) {
-		page_pool_recycle_direct(rq->page_pool, dma_info->page);
+		if (maio_configured)
+			put_page(dma_info->page);
+		else
+			page_pool_recycle_direct(rq->page_pool, dma_info->page);
 		dma_info->page = NULL;
 		return -ENOMEM;
 	}
@@ -258,6 +270,7 @@ static inline int mlx5e_page_alloc_pool(struct mlx5e_rq *rq,
 	return 0;
 }
 
+/*TODO: Change this behavior */
 static inline int mlx5e_page_alloc(struct mlx5e_rq *rq,
 				   struct mlx5e_dma_info *dma_info)
 {
@@ -276,10 +289,17 @@ void mlx5e_page_release_dynamic(struct mlx5e_rq *rq,
 				struct mlx5e_dma_info *dma_info,
 				bool recycle)
 {
+
+	if (maio_configured) {
+		mlx5e_page_dma_unmap(rq, dma_info);
+		put_page(dma_info->page);
+		return;
+	}
 	if (likely(recycle)) {
+/*
 		if (mlx5e_rx_cache_put(rq, dma_info))
 			return;
-
+*/
 		mlx5e_page_dma_unmap(rq, dma_info);
 		page_pool_recycle_direct(rq->page_pool, dma_info->page);
 	} else {
@@ -319,10 +339,16 @@ static inline int mlx5e_get_rx_frag(struct mlx5e_rq *rq,
 	return err;
 }
 
+/*TODO: Eehm... look at this... */
 static inline void mlx5e_put_rx_frag(struct mlx5e_rq *rq,
 				     struct mlx5e_wqe_frag_info *frag,
 				     bool recycle)
 {
+/*
+	if (is_maio_page(frag->di->page))
+		 trace_printk("%pS:%s:%llx\n", __builtin_return_address(0), __FUNCTION__,
+                               (unsigned long long)frag->di->page);
+*/
 	if (frag->last_in_page)
 		mlx5e_page_release(rq, frag->di, recycle);
 }
@@ -335,6 +361,7 @@ static inline struct mlx5e_wqe_frag_info *get_frag(struct mlx5e_rq *rq, u16 ix)
 static int mlx5e_alloc_rx_wqe(struct mlx5e_rq *rq, struct mlx5e_rx_wqe_cyc *wqe,
 			      u16 ix)
 {
+	static u64 headroom;
 	struct mlx5e_wqe_frag_info *frag = get_frag(rq, ix);
 	int err;
 	int i;
@@ -344,8 +371,13 @@ static int mlx5e_alloc_rx_wqe(struct mlx5e_rq *rq, struct mlx5e_rx_wqe_cyc *wqe,
 		if (unlikely(err))
 			goto free_frags;
 
+		//headroom = maio_get_page_headroom(dma_info->page);
 		wqe->data[i].addr = cpu_to_be64(frag->di->addr +
 						frag->offset + rq->buff.headroom);
+		if (unlikely(headroom != rq->buff.headroom)) {
+			trace_printk("serendip: offset %d headroom %d\n", frag->offset, rq->buff.headroom);
+			headroom = rq->buff.headroom;
+		}
 	}
 
 	return 0;
@@ -412,7 +444,10 @@ mlx5e_add_skb_frag(struct mlx5e_rq *rq, struct sk_buff *skb,
 	dma_sync_single_for_cpu(rq->pdev,
 				di->addr + frag_offset,
 				len, DMA_FROM_DEVICE);
+	/* pages need to be alloceds with refcount 0 */
 	page_ref_inc(di->page);
+        pr_err("ERROR:ERROR: %d:%s:%llx[%d]\n", smp_processor_id(), __FUNCTION__,
+			(u64)di->page, page_ref_count(di->page));
 	skb_add_rx_frag(skb, skb_shinfo(skb)->nr_frags,
 			di->page, frag_offset, len, truesize);
 }
@@ -1073,6 +1108,10 @@ mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq, struct mlx5_cqe64 *cqe,
 	prefetchw(va); /* xdp_frame data area */
 	prefetch(data);
 
+	if (maio_post_rx_page(data, cqe_bcnt))
+		return NULL; /* page/packet was consumed by MAIO */
+
+	/* Capture RX here... */
 	rcu_read_lock();
 	consumed = mlx5e_xdp_handle(rq, di, va, &rx_headroom, &cqe_bcnt, false);
 	rcu_read_unlock();
@@ -1103,6 +1142,7 @@ mlx5e_skb_from_cqe_nonlinear(struct mlx5e_rq *rq, struct mlx5_cqe64 *cqe,
 	/* XDP is not supported in this configuration, as incoming packets
 	 * might spread among multiple pages.
 	 */
+	/*TODO: Need to check these...*/
 	skb = napi_alloc_skb(rq->cq.napi,
 			     ALIGN(MLX5E_RX_MAX_HEAD, sizeof(long)));
 	if (unlikely(!skb)) {
@@ -1243,6 +1283,10 @@ mlx5e_skb_from_cqe_mpwrq_nonlinear(struct mlx5e_rq *rq, struct mlx5e_mpw_info *w
 	struct mlx5e_dma_info *head_di = di;
 	struct sk_buff *skb;
 
+	/* TODO: These will not be ZC - unless napi_alloc_skb uses MAIO:
+		The thing is I dont need to, due to --- the data being duplicated.
+		I can still pass on the pages ZC. - I dont mind the copy...
+	*/
 	skb = napi_alloc_skb(rq->cq.napi,
 			     ALIGN(MLX5E_RX_MAX_HEAD, sizeof(long)));
 	if (unlikely(!skb)) {
@@ -1320,7 +1364,10 @@ mlx5e_skb_from_cqe_mpwrq_linear(struct mlx5e_rq *rq, struct mlx5e_mpw_info *wi,
 
 	/* queue up for recycling/reuse */
 	page_ref_inc(di->page);
-
+/*
+        trace_printk("%d:%s:%llx[%d]\n", smp_processor_id(), __FUNCTION__,
+			(u64)di->page, page_ref_count(di->page));
+*/
 	return skb;
 }
 
