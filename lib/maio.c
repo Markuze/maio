@@ -7,8 +7,9 @@
 #include <linux/string.h>
 #include <linux/netdevice.h>
 #include <linux/rbtree.h>
-#include <linux/ctype.h> /*isdigit*/
-#include <linux/ip.h>	/*iphdr*/
+#include <linux/ctype.h>	/*isdigit*/
+#include <linux/ip.h>		/*iphdr*/
+#include <linux/tcp.h>  	/*tcphdr*/
 
 #ifndef assert
 #define assert(expr) 	do { \
@@ -33,6 +34,8 @@
 volatile bool maio_configured;
 EXPORT_SYMBOL(maio_configured);
 
+maio_filter_func_p maio_filter;
+EXPORT_SYMBOL(maio_filter);
 //TODO: collect this shite in a struct
 
 /* get_user_pages */
@@ -399,20 +402,30 @@ static inline char* alloc_copy_buff(struct percpu_maio_qp *qp)
 	return data;
 }
 
+/* Capture all but ssh traffic */
+static inline bool default_maio_filter(void *addr)
+{
+	struct ethhdr   *eth    = addr;
+	struct iphdr    *iphdr  = (struct iphdr *)&eth[1];
+	struct tcphdr	*tcphdr = (struct tcphdr *)&iphdr[1];
+
+	if (ntohs(tcphdr->dest) == 22) {
+		return 0;
+	}
+
+	return 1;
+}
+
+void reset_maio_default_filter(void)
+{
+	maio_filter = default_maio_filter;
+}
+EXPORT_SYMBOL(reset_maio_default_filter);
+
+
 static inline int filter_packet(void *addr)
 {
-	struct ethhdr	*eth 	= addr;
-	struct iphdr	*iphdr	= (struct iphdr	*)&eth[1];
-
-	/* network byte order of loader machine */
-	int trgt = (10|5<<8|3<<16|4<<24);
-
-
-	if (trgt == iphdr->saddr) {
-		trace_debug("SIP: %pI4 N[%x] DIP: %pI4 N[%x]\n", &iphdr->saddr, iphdr->saddr, &iphdr->daddr, iphdr->daddr);
-		return 1;
-	}
-	return 0;
+	return maio_filter(addr);
 }
 
 static inline int __maio_post_rx_page(void *addr, u32 len, int copy)
@@ -531,7 +544,7 @@ unlock:
 #define tx_ring_entry(qp) 	(qp)->tx_ring[(qp)->tx_counter & ((qp)->tx_sz -1)]
 #define advance_tx_ring(qp)	(qp)->tx_ring[(qp)->tx_counter++ & ((qp)->tx_sz -1)] = 0
 
-#define TX_BATCH_SIZE	128
+#define TX_BATCH_SIZE	64
 int maio_post_tx_page(void *unused)
 {
 	struct io_md *md;
@@ -621,7 +634,8 @@ int maio_post_tx_page(void *unused)
 
 static inline ssize_t maio_tx(struct file *file, const char __user *buf,
                                     size_t size, loff_t *_pos)
-{	char	kbuff[MAIO_TX_KBUFF_SZ], *cur;
+{
+	char	kbuff[MAIO_TX_KBUFF_SZ], *cur;
 	size_t 	val;
 	static size_t prev = -1;
 
@@ -1056,6 +1070,7 @@ static __init int maio_init(void)
 {
 	int i = 0;
 
+	maio_filter = default_maio_filter;
 	maio_configured = false;
 	for (;i< NUM_MAIO_SIZES; i++)
 		mag_allocator_init(&global_maio.mag[i]);

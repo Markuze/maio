@@ -22,6 +22,9 @@
 
 #define show_line pr_err("%s:%d\n",__FUNCTION__, __LINE__)
 
+typedef bool (*maio_filter_func_p)(void *);
+
+extern maio_filter_func_p maio_filter;
 extern volatile bool maio_configured;
 extern struct user_matrix *global_maio_matrix;
 
@@ -92,6 +95,7 @@ struct percpu_maio_qp {
 	void *cached_mbuf;
 };
 
+void reset_maio_default_filter(void);
 u16 maio_get_page_headroom(struct page *page);
 int maio_post_rx_page(void *addr, u32 len);
 int maio_post_rx_page_copy(void *addr, u32 len);
