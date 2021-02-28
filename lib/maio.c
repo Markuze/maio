@@ -1072,6 +1072,18 @@ static int maio_map_show(struct seq_file *m, void *v)
         return 0;
 }
 
+#define MAIO_VERSION	"v0.2"
+static int maio_version_show(struct seq_file *m, void *v)
+{
+	seq_printf(m, "%s\n", MAIO_VERSION);
+	return 0;
+}
+
+static int maio_version_open(struct inode *inode, struct file *file)
+{
+        return single_open(file, maio_version_show, PDE_DATA(inode));
+}
+
 static int maio_enable_open(struct inode *inode, struct file *file)
 {
         return single_open(file, maio_enable_show, PDE_DATA(inode));
@@ -1081,6 +1093,13 @@ static int maio_map_open(struct inode *inode, struct file *file)
 {
         return single_open(file, maio_map_show, PDE_DATA(inode));
 }
+
+static const struct file_operations maio_version_fops = {
+        .owner          = THIS_MODULE,
+        .open           = maio_version_open,
+        .read           = seq_read,
+        .release        = single_release,
+};
 
 static const struct file_operations maio_mtrx_ops = {
         .open      = maio_map_open,
@@ -1150,6 +1169,7 @@ static inline void proc_init(void)
 	proc_create_data("pages_0", 00666, maio_dir, &maio_page_0_ops, NULL);
 	proc_create_data("enable", 00666, maio_dir, &maio_enable_ops, NULL);
 	proc_create_data("tx", 00666, maio_dir, &maio_tx_ops, NULL);
+	proc_create_data("version", 00444, maio_dir, &maio_version_fops, NULL );
 }
 
 static __init int maio_init(void)
