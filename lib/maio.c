@@ -52,7 +52,7 @@ static struct maio_dev_map dev_map;
 /*TODO: Remove*/
 static u64 maio_rx_post_cnt;
 
-static u16 maio_headroom = (1024 -128);
+static u16 maio_headroom = (0x800 -512);
 static u16 maio_stride = 0x1000;//4K
 
 /* HP Cache */
