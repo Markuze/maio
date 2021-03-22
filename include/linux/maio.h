@@ -11,6 +11,9 @@
 #define HUGE_OFFSET	(HUGE_SIZE -1)
 #define PAGES_IN_HUGE	(1<<HUGE_ORDER)
 
+#define IS_MAIO_MASK	0x1	//probably have 21 bits.
+#define MAIO_MASK_MAX	HUGE_OFFSET
+
 #define NUM_MAX_RINGS	16
 #define MAX_DEV_NUM 	16
 
@@ -30,6 +33,15 @@ typedef bool (*maio_filter_func_p)(void *);
 extern maio_filter_func_p maio_filter;
 extern volatile bool maio_configured;
 extern struct user_matrix *global_maio_matrix[MAX_DEV_NUM];
+
+/******** MAIO PAGE PRIVATE FLAGS ****************/
+#define MAIO_PAGE_MBUF 0xF00
+#define MAIO_PAGE_FREE 0x800   // storred in the magz
+#define MAIO_PAGE_IO   0x600   // TX|RX
+#define MAIO_PAGE_TX   0x400   // sent by user
+#define MAIO_PAGE_RX   0x200   // alloced from magz - usualy RX
+#define MAIO_PAGE_USER 0x100   // page in user space control
+/*************************************************/
 
 /********* Caution: Should be same as user counterpart ************************/
 
