@@ -57,6 +57,8 @@ extern struct user_matrix *global_maio_matrix[MAX_DEV_NUM];
 
 #define MAIO_POISON 		(0xFEA20FDAU)
 #define MAIO_STATUS_VLAN_VALID 	(0x1)
+#define MAIO_STATUS_TX_COMPLETE (0x2)
+#define MAIO_STATUS_USER_LOCK	(0x4)
 
 struct io_md {
 	u64 state;
