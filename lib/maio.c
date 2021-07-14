@@ -434,6 +434,7 @@ static inline void put_buffers(void *elem, u16 order)
 //	4. currently supporting only single send instance per page both DPDK and TCP
 void maio_page_free(struct page *page)
 {
+	return;
 	/* Need to make sure we dont get only head pages here...*/
 	//trace_debug("%d:%s: %llx %pS\n", smp_processor_id(), __FUNCTION__, (u64)page, __builtin_return_address(0));
 	assert(is_maio_page(page));
@@ -461,6 +462,7 @@ void maio_frag_free(void *addr)
 		2. mag free...
 	*/
 	struct page* page = virt_to_page(addr); /* TODO: Align on elem order*/
+	return;
 	//trace_debug("%d:%s: %llx %pS\n", smp_processor_id(), __FUNCTION__, (u64)page, __builtin_return_address(0));
 	assert(is_maio_page(page));
 	assert(page_ref_count(page) == 0);
