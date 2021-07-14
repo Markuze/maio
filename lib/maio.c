@@ -78,7 +78,7 @@ static struct maio_tx_threads	maio_tx_threads[MAX_DEV_NUM];
 static struct net_device *maio_devs[MAX_DEV_NUM] __read_mostly;
 static struct maio_dev_map dev_map;
 
-#define MAX_TCP_THREADS	16
+#define MAX_TCP_THREADS	128
 static int curr_tcp_id;
 static struct maio_tx_thread tcp_threads[MAX_TCP_THREADS];
 
@@ -434,6 +434,7 @@ static inline void put_buffers(void *elem, u16 order)
 //	4. currently supporting only single send instance per page both DPDK and TCP
 void maio_page_free(struct page *page)
 {
+	return;
 	/* Need to make sure we dont get only head pages here...*/
 	//trace_debug("%d:%s: %llx %pS\n", smp_processor_id(), __FUNCTION__, (u64)page, __builtin_return_address(0));
 	assert(is_maio_page(page));
@@ -461,6 +462,7 @@ void maio_frag_free(void *addr)
 		2. mag free...
 	*/
 	struct page* page = virt_to_page(addr); /* TODO: Align on elem order*/
+	return;
 	//trace_debug("%d:%s: %llx %pS\n", smp_processor_id(), __FUNCTION__, (u64)page, __builtin_return_address(0));
 	assert(is_maio_page(page));
 	assert(page_ref_count(page) == 0);
@@ -1146,7 +1148,7 @@ int maio_post_tx_tcp_page(void *state)
 	struct maio_tx_thread *tx_thread = state;
 	int cnt = 0;
 
-	trace_debug("[%s]%d Starting\n", __FUNCTION__, smp_processor_id());
+	trace_debug("[%s]%d Starting %d\n", __FUNCTION__, smp_processor_id(), tx_thread->ring_id);
 
 	while (valid_tcp_entry(tx_thread)) {
 		unsigned size;
@@ -1190,8 +1192,8 @@ int maio_post_tx_tcp_page(void *state)
 			page_ref_inc(page);
 
 			flags |= (size) ? MSG_SENDPAGE_NOTLAST : 0;
-			trace_debug("[%d]sending page[%llx:%d] off %x bytes %ld [%x]\n",
-				smp_processor_id(), (u64)page, page_ref_count(page), off, bytes, flags);
+			trace_debug("[%d:%d]sending page[%llx:%d] off %x bytes %ld [%x]\n",
+				smp_processor_id(), tx_thread->ring_id, (u64)page, page_ref_count(page), off, bytes, flags);
 			tcp_sendpage(tx_thread->socket->sk, page, off, bytes, flags);
 			page_ref_dec(page);
 			page++;
@@ -1202,6 +1204,9 @@ int maio_post_tx_tcp_page(void *state)
 		smd->state = MAIO_SMD_FREE;
 		tcp_ring_next(tx_thread);
 
+		if (unlikely(!(tx_thread->tx_counter & 0xfffff)))
+			trace_printk("%s counter %lu\n", __FUNCTION__, tx_thread->tx_counter);
+
 		show_io(kaddr, "TX");
 		++cnt;
 	}
@@ -1210,7 +1215,7 @@ int maio_post_tx_tcp_page(void *state)
 		complete(&tx_thread->completion);
 	}
 
-	trace_debug("[%d]Sent %d valid smd\n", smp_processor_id(), cnt);
+	trace_debug("[%d:%d]Sent %d valid smd\n", tx_thread->ring_id, smp_processor_id(), cnt);
 	return cnt;
 }
 
@@ -1272,6 +1277,11 @@ static inline ssize_t maio_get_page_rc(struct file *file, const char __user *buf
 	uaddr = simple_strtoull(kbuff, &cur, 16);
 
 	kaddr = uaddr2addr(uaddr);
+	if (IS_ERR_VALUE(kaddr)) {
+		pr_err("%s:Got: BAD uaddr %llx\n", __FUNCTION__, uaddr);
+		return (unsigned long)kaddr;
+	}
+
 	page = virt_to_page(kaddr);
 
 	pr_err("%s:Got:uaddr %llx :%d: state %llx\n", __FUNCTION__, uaddr, page_ref_count(page), get_page_state(page));
@@ -1287,6 +1297,8 @@ static inline ssize_t maio_tcp_tx(struct file *file, const char __user *buf,
 	size_t 	sock_idx, sleep;
 	unsigned long  val;
 
+//	static unsigned long  poll;
+
 	if (unlikely(size < 1 || size >= MAIO_TX_KBUFF_SZ))
 	        return -EINVAL;
 
@@ -1296,8 +1308,14 @@ static inline ssize_t maio_tcp_tx(struct file *file, const char __user *buf,
 
 	sock_idx = simple_strtoull(kbuff, &cur, 10);
 	sleep = simple_strtoull(cur + 1, &cur, 10);
-	trace_debug("%s:Got:sock %ld] %s\n", __FUNCTION__, sock_idx, sleep ? "Sleep": "");
-
+#if 0
+	if (sleep) {
+		trace_printk("%s:Got:sock %ld] %s (%lu)\n", __FUNCTION__, sock_idx, "Sleep", poll);
+		poll = 0;
+	} else {
+		++poll;
+	}
+#endif
 	if (likely(sock_idx > MAX_TCP_THREADS))
 	        return -EINVAL;
 
@@ -2005,7 +2023,7 @@ static inline ssize_t init_tcp_ring(struct file *file, const char __user *buf,
 	tx_thread->tx_counter = 0;
 	tx_thread->tx_sz = len/sizeof(struct sock_md);
 	tx_thread->tx_ring = uaddr2addr(base);
-	tx_thread->ring_id = 0;
+	tx_thread->ring_id = sock_idx;
 
 	return size;
 }
