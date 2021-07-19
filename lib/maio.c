@@ -359,26 +359,37 @@ static inline void put_buffers(void *elem, u16 order)
 	maio_free_elem(elem, order);
 }
 
-static inline void reset_io_md(void *addr)
+void maio_page_free(struct page *page)
 {
-	struct io_md *md = virt2io_md(addr);
-	struct io_md *shadow = kaddr2shadow_md(addr);
-
-	memset(md, 0, sizeof(struct io_md));
-	memset(shadow, 0, sizeof(struct io_md));
-
-	md->poison = shadow->poison = MAIO_POISON;
-}
-
-static inline void __maio_elem_free(struct page *page, void *addr)
-{
-	struct io_md *md = virt2io_md(addr);
-
+	/* Need to make sure we dont get only head pages here...*/
+	//trace_debug("%d:%s: %llx %pS\n", smp_processor_id(), __FUNCTION__, (u64)page, __builtin_return_address(0));
 	assert(is_maio_page(page));
 	assert(page_ref_count(page) == 0);
+	if (unlikely(! (get_page_state(page) & MAIO_PAGE_IO))) {
+		pr_err("ERROR: Page %llx state %llx uaddr %llx\n", (u64)page, get_page_state(page), get_maio_uaddr(page));
+		pr_err("%d:%s:%llx :%s\n", smp_processor_id(), __FUNCTION__, (u64)page, PageHead(page)?"HEAD":"");
+	}
+	assert(get_page_state(page) & MAIO_PAGE_IO);
 
-	if (unlikely(! (md->state & MAIO_PAGE_IO))) {
-		pr_err("ERROR: Page %llx state %llx uaddr %llx\n", (u64)page, md->state, get_maio_uaddr(page));
+	set_page_state(page, MAIO_PAGE_FREE);
+	put_buffers(page_address(page), get_maio_elem_order(page));
+	return;
+}
+EXPORT_SYMBOL(maio_page_free);
+
+void maio_frag_free(void *addr)
+{
+	/*
+	struct page *page = virt_to_head_page(addr);
+		1. get idx
+		2. mag free...
+	*/
+	struct page* page = virt_to_page(addr); /* TODO: Align on elem order*/
+	//trace_debug("%d:%s: %llx %pS\n", smp_processor_id(), __FUNCTION__, (u64)page, __builtin_return_address(0));
+	assert(is_maio_page(page));
+	assert(page_ref_count(page) == 0);
+	if (unlikely(! (get_page_state(page) & MAIO_PAGE_IO))) {
+		pr_err("ERROR: Page %llx state %llx uaddr %llx\n", (u64)page, get_page_state(page), get_maio_uaddr(page));
 		pr_err("%d:%s:%llx :%s\n", smp_processor_id(), __FUNCTION__, (u64)page_address(page), PageHead(page)?"HEAD":"Tail");
 		dump_io_md(virt2io_md(addr), "MD");
 		dump_io_md(kaddr2shadow_md(addr), "SHADOW");
@@ -388,39 +399,11 @@ static inline void __maio_elem_free(struct page *page, void *addr)
 			memcpy(virt2io_md(addr), kaddr2shadow_md(addr), sizeof(struct io_md));
 		}
 	}
-
-	/*TODO: With USER_LOCKED packet can be sent twice!! - Prevent in userspace*/
-	assert(md->state & MAIO_PAGE_IO);
-
-	if (md->flags & MAIO_STATUS_USER_LOCK) {
-		assert(md->state & (MAIO_PAGE_TX|MAIO_PAGE_NAPI));
-		set_page_state(page, MAIO_PAGE_USER);
-		/* This is ordering is importnat! at this point the page ref count is 0
-			but it still may be used by uspace.
-			* setting TX_COMPLETE may cause a zero-refcount page to be sent.., panic.
-		*/
-		//get_page will punic with CONFIG_DEBUG_VM due to refcnt == 0
-		page_ref_inc(page);
-		/**/
-		md->flags |= MAIO_STATUS_TX_COMPLETE;
-	} else {
-		reset_io_md(addr);
-		set_page_state(page, MAIO_PAGE_FREE);
-		put_buffers(addr, get_maio_elem_order(page));
-	}
+	assert(get_page_state(page) & MAIO_PAGE_IO);
+	set_page_state(page, MAIO_PAGE_FREE);
+	put_buffers(page_address(page), get_maio_elem_order(page));
 
 	return;
-}
-
-void maio_page_free(struct page *page)
-{
-	__maio_elem_free(page, page_address(page));
-}
-EXPORT_SYMBOL(maio_page_free);
-
-void maio_frag_free(void *addr)
-{
-	__maio_elem_free(virt_to_page(addr), addr);
 }
 EXPORT_SYMBOL(maio_frag_free);
 
@@ -1024,7 +1007,7 @@ int maio_post_tx_page(void *state)
 
 		/* A refill page from user following an lwm crosss */
 		if (unlikely(!md->len)) {
-			trace_debug(" Received page from user [%d](%d)\n", mag_get_full_count(&global_maio.mag[0]), page_ref_count(page));
+			trace_printk(" Received page from user [%d](%d)\n", mag_get_full_count(&global_maio.mag[0]), page_ref_count(page));
 			put_page(page);
 			local_lwm = false;
 
