@@ -55,7 +55,6 @@ EXPORT_SYMBOL(global_maio_matrix);
 static unsigned last_dev_idx;
 
 static u16 maio_headroom	= (0x800 -512 -192); 	//This should make a zero gap between vc_pckt and headroom + data
-static u16 maio_stride		= 0x1000; 		//4K
 
 /* HP Cache */
 static LIST_HEAD(hp_cache);
@@ -428,7 +427,7 @@ EXPORT_SYMBOL(maio_get_page_headroom);
 
 u16 maio_get_page_stride(struct page *page)
 {
-	return maio_stride;
+	return PAGE_SIZE;
 }
 EXPORT_SYMBOL(maio_get_page_stride);
 
@@ -447,7 +446,7 @@ struct page *maio_alloc_pages(size_t order)
 		replenish_from_cache(order);
 		buffer = mag_alloc_elem(&global_maio.mag[order2idx(order)]);
 		*/
-		pr_err("Failed to alloc from MAIO mag\n");
+		pr_err("Failed to alloc from MAIO mag [%ps]\n", __builtin_return_address(0));
 		return alloc_page(GFP_KERNEL|GFP_ATOMIC);
 	}
 	assert(buffer != NULL);//should not happen
@@ -869,10 +868,7 @@ unlock:
 struct sk_buff *maio_build_linear_rx_skb(struct net_device *netdev, void *va, size_t size)
 {
 	void *page_address = (void *)((u64)va & PAGE_MASK);
-	struct sk_buff *skb = build_skb(page_address, PAGE_SIZE);
-
-	u64 dinfo;
-	u64 dmd;
+	struct sk_buff *skb = build_skb(page_address, IO_MD_OFF);
 
 	if (unlikely(!skb))
 		return NULL;
@@ -889,16 +885,6 @@ struct sk_buff *maio_build_linear_rx_skb(struct net_device *netdev, void *va, si
 	skb->protocol = eth_type_trans(skb, netdev);
 	skb->ip_summed = CHECKSUM_UNNECESSARY;
 	skb->dev = netdev;
-
-	dinfo = (u64)skb_shinfo(skb) - (u64)(virt2io_md(skb->data));
-	dmd   = (u64)virt2io_md(skb->data) - (u64)skb_tail_pointer(skb);
-	if (unlikely( dinfo > PAGE_SIZE  || dmd > PAGE_SIZE ))
-	{
-		pr_err(">>> VA %llx shinfo %llx tail %llx md %llx [%lx]\n", (u64)va, (u64)skb_shinfo(skb),
-			(u64)skb_tail_pointer(skb), (u64)virt2io_md(skb->data), sizeof(struct io_md));
-		pr_err(">>> DMD %llx DINFO %llx\n", dmd, dinfo);
-		panic("%s is broken\n", __FUNCTION__);
-	}
 
 	return skb;
 }
@@ -1009,7 +995,7 @@ int maio_post_tx_page(void *state)
 //TODO: Consider adding ERR flags to ring entry.
 
 		len 	= md->len + SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
-		size 	= maio_stride - ((u64)kaddr & (maio_stride -1));
+		size 	= IO_MD_OFF - ((u64)kaddr & (PAGE_SIZE - 1));
 
 		show_io(kaddr, "TX");
 		trace_debug("TX %llx/%llx [%d]from user %llx [#%d]\n",
@@ -1301,7 +1287,6 @@ static int maio_post_napi_page(struct maio_tx_thread *tx_thread/*, struct napi_s
 		}
 
 		len 	= md->len;// + SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
-		//size 	= maio_stride - ((u64)kaddr & (maio_stride -1));
 
 		trace_debug("NAPI %llx/%llx [%d]from user %llx [#%d] len %d\n",
 				(u64)kaddr, (u64)page, page_ref_count(page),

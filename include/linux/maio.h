@@ -50,8 +50,8 @@ extern struct user_matrix *global_maio_matrix[MAX_DEV_NUM];
 
 
 /* Current mem layout
-	4K [64|128 |640   | 512     |2KB  |384 B|320 B      ]
-	   [ dpdk  |vc_pkt| headroom| data| hole| skb_shinfo]
+	4K [64|128 |640   | 512     |2KB  |320 B	    |320 B      | 64B  ]
+	   [ dpdk  |vc_pkt| headroom| data| hole <shadow md>| skb_shinfo| io_md]
 */
 /********* Caution: Should be same as user counterpart ************************/
 
@@ -66,9 +66,9 @@ struct io_md {
 	u16 flags;
 };
 
-#define SHADOW_OFF	(PAGE_SIZE - SKB_DATA_ALIGN(sizeof(struct skb_shared_info)) \
-				- SKB_DATA_ALIGN(sizeof(struct io_md)))
-#define IO_MD_OFF	(PAGE_SIZE - 512)
+#define IO_MD_OFF	(PAGE_SIZE - SKB_DATA_ALIGN(sizeof(struct io_md)))
+#define SHADOW_OFF	(IO_MD_OFF - SKB_DATA_ALIGN(sizeof(struct skb_shared_info)) \
+					- SKB_DATA_ALIGN(sizeof(struct io_md)))
 
 struct common_ring_info {
         u32 nr_rx_rings;
