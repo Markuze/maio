@@ -359,35 +359,11 @@ static inline void put_buffers(void *elem, u16 order)
 	maio_free_elem(elem, order);
 }
 
-void maio_page_free(struct page *page)
+static inline void __maio_free(struct page *page, void *addr)
 {
-	/* Need to make sure we dont get only head pages here...*/
-	//trace_debug("%d:%s: %llx %pS\n", smp_processor_id(), __FUNCTION__, (u64)page, __builtin_return_address(0));
 	assert(is_maio_page(page));
 	assert(page_ref_count(page) == 0);
-	if (unlikely(! (get_page_state(page) & MAIO_PAGE_IO))) {
-		pr_err("ERROR: Page %llx state %llx uaddr %llx\n", (u64)page, get_page_state(page), get_maio_uaddr(page));
-		pr_err("%d:%s:%llx :%s\n", smp_processor_id(), __FUNCTION__, (u64)page, PageHead(page)?"HEAD":"");
-	}
-	assert(get_page_state(page) & MAIO_PAGE_IO);
 
-	set_page_state(page, MAIO_PAGE_FREE);
-	put_buffers(page_address(page), get_maio_elem_order(page));
-	return;
-}
-EXPORT_SYMBOL(maio_page_free);
-
-void maio_frag_free(void *addr)
-{
-	/*
-	struct page *page = virt_to_head_page(addr);
-		1. get idx
-		2. mag free...
-	*/
-	struct page* page = virt_to_page(addr); /* TODO: Align on elem order*/
-	//trace_debug("%d:%s: %llx %pS\n", smp_processor_id(), __FUNCTION__, (u64)page, __builtin_return_address(0));
-	assert(is_maio_page(page));
-	assert(page_ref_count(page) == 0);
 	if (unlikely(! (get_page_state(page) & MAIO_PAGE_IO))) {
 		pr_err("ERROR: Page %llx state %llx uaddr %llx\n", (u64)page, get_page_state(page), get_maio_uaddr(page));
 		pr_err("%d:%s:%llx :%s\n", smp_processor_id(), __FUNCTION__, (u64)page_address(page), PageHead(page)?"HEAD":"Tail");
@@ -400,10 +376,27 @@ void maio_frag_free(void *addr)
 		}
 	}
 	assert(get_page_state(page) & MAIO_PAGE_IO);
-	set_page_state(page, MAIO_PAGE_FREE);
-	put_buffers(page_address(page), get_maio_elem_order(page));
 
+	set_page_state(page, MAIO_PAGE_FREE);
+	put_buffers(addr, get_maio_elem_order(page));
+}
+
+void maio_page_free(struct page *page)
+{
+	__maio_free(page, page_address(page));
 	return;
+}
+EXPORT_SYMBOL(maio_page_free);
+
+void maio_frag_free(void *addr)
+{
+	/*
+	struct page *page = virt_to_head_page(addr);
+		1. get idx
+		2. mag free...
+	*/
+	struct page* page = virt_to_page(addr); /* TODO: Align on elem order*/
+	__maio_free(page, addr);
 }
 EXPORT_SYMBOL(maio_frag_free);
 
