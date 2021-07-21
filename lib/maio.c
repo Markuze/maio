@@ -865,7 +865,7 @@ unlock:
 #define tx_ring_entry(qp) 	(qp)->tx_ring[(qp)->tx_counter & ((qp)->tx_sz -1)]
 #define advance_tx_ring(qp)	(qp)->tx_ring[(qp)->tx_counter++ & ((qp)->tx_sz -1)] = 0
 
-struct sk_buff *maio_build_linear_rx_skb(struct net_device *netdev, void *va, size_t size)
+struct sk_buff *maio_build_linear_skb(struct net_device *netdev, void *va, size_t size)
 {
 	void *page_address = (void *)((u64)va & PAGE_MASK);
 	struct sk_buff *skb = build_skb(page_address, IO_MD_OFF);
@@ -1005,10 +1005,18 @@ int maio_post_tx_page(void *state)
 			pr_err("Buffer to Long [%llx] len %u klen = %u\n", uaddr, md->len, len);
 			continue;
 		}
-
+#if 0
 		skb = build_skb(kaddr, size);
 		skb_put(skb, md->len);
 		skb->dev = tx_thread->netdev;
+#endif
+		skb = maio_build_linear_skb(tx_thread->netdev, kaddr, md->len);
+		if (unlikely(!skb)) {
+			pr_err("%s) Failed to alloc skb\n", __FUNCTION__);
+			put_page(page);
+			continue;
+		}
+
 		if (md->flags & MAIO_STATUS_VLAN_VALID)
 			__vlan_hwaccel_put_tag(skb, htons(ETH_P_8021Q), md->vlan_tci);
 		//get_page(virt_to_page(kaddr));
@@ -1295,7 +1303,7 @@ static int maio_post_napi_page(struct maio_tx_thread *tx_thread/*, struct napi_s
 			pr_err("Buffer to Long [%llx] len %u klen = %u\n", uaddr, md->len, len);
 			continue;
 		}
-		skb = maio_build_linear_rx_skb(tx_thread->netdev, kaddr, len);
+		skb = maio_build_linear_skb(tx_thread->netdev, kaddr, len);
 		if (unlikely(!skb)) {
 			pr_err("Failed to alloc napi skb\n");
 			put_page(page);
