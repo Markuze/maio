@@ -35,3 +35,9 @@ file and in the `main` make sure that `func()` is called. Change IP and port to 
 - **send() with zero-copy:** This mode is like `naive` but uses `MSG_ZEROCOPY` flag with `send()` function. 
     - Edit the `naive_client.cpp` file, set `K_MSGZEROCOPY` to 1, and make sure that in the `main()` function the `func()` is called.
     - Follow the `naive` mode instructions.
+  
+- **MAIO**: This mode assumes that MAIO kernel is installed and the system has been boot from it.
+
+  Edit `maio_tcp_client.c` and change IP and port to match the `naive-server.c`
+  
+  Run `./test.sh` script - it will build MAIO client and run it.
