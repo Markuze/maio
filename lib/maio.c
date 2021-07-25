@@ -432,6 +432,25 @@ u16 maio_get_page_stride(struct page *page)
 EXPORT_SYMBOL(maio_get_page_stride);
 
 
+struct page *__maio_alloc_pages(size_t order)
+{
+	void *buffer;
+	struct page *page;
+
+	buffer = mag_alloc_elem(&global_maio.mag[order2idx(order)]);
+
+	page = (buffer) ? virt_to_page(buffer) : NULL;
+	if (!page)
+		return NULL;
+
+	init_page_count(page);
+	assert(get_page_state(page) == MAIO_PAGE_FREE);
+	set_page_state(page, MAIO_PAGE_RX);
+
+	return page;
+}
+#define __maio_alloc_page()	__maio_alloc_pages(0)
+
 struct page *maio_alloc_pages(size_t order)
 {
 	struct page *page;
@@ -582,7 +601,7 @@ static inline int setup_dev_idx(unsigned dev_idx)
 		}
 		//On RX choose the correct  QP
 		dev_map.on_rx[iter_dev->ifindex] = dev_idx;
-		maio_dev_configured[iter_dev->ifindex] = true;
+		//maio_dev_configured[iter_dev->ifindex] = true;
 		maio_devs[iter_dev->ifindex] = iter_dev;
 	}
 
@@ -708,7 +727,9 @@ send_the_page:
 		void *buff;
 		trace_debug("HWM crossed [%d], sending page to user\n", mag_get_full_count(&global_maio.mag[0]));
 		//if hwm was crossed
-		refill = maio_alloc_page();
+		refill = __maio_alloc_page();
+		if (!unlikely(!refill))
+			goto send_the_page;
 		/* For the assert */
 		set_page_state(refill, MAIO_PAGE_USER);
 
@@ -728,10 +749,8 @@ send_the_page:
 	if (!page) {
 		void *buff;
 
-		page = maio_alloc_page();
+		page = __maio_alloc_page();
 		if (unlikely(!page)) {
-			trace_printk("[%d]User to slow. dropping post of %llx:%llx\n",
-				smp_processor_id(), (u64)addr, addr2uaddr(addr));
 			return 0;
 		}
 
@@ -850,7 +869,7 @@ int maio_xmit(struct net_device *dev, struct sk_buff **skb, int cnt)
 	for ( i = 0; i < cnt; i++) {
 		err = netdev_start_xmit(skb[i], dev, txq, --more);
 		if (unlikely(err != NETDEV_TX_OK)) {
-			trace_printk("netdev_start_xmit failed with %0xx\n", err);
+			pr_err("netdev_start_xmit failed with %0xx\n", err);
 			consume_skb(skb[i]);
 		}
 	}
@@ -938,7 +957,7 @@ int maio_post_tx_page(void *state)
 
 		if (unlikely( ! page_ref_count(page))) {
 			if (unlikely(get_page_state(page))) {
-				pr_err("TX] Zero fefcount page %llx(state %llx)[%d] addr %llx -- reseting \n",
+				pr_err("TX] Zero refcount page %llx(state %llx)[%d] addr %llx -- reseting \n",
 					(u64)page, get_page_state(page), page_ref_count(page), (u64)kaddr);
 				panic("Illegal page state\n");
 			}
@@ -953,7 +972,7 @@ int maio_post_tx_page(void *state)
 				set_maio_is_io(page);
 				set_page_state(page, MAIO_POISON); // Need to add on NEW USER pages.
 
-				page = maio_alloc_page();
+				page = __maio_alloc_page();
 				if (!page)
 					return 0;
 				buff = page_address(page);
@@ -1004,7 +1023,7 @@ int maio_post_tx_page(void *state)
 
 		/* A refill page from user following an lwm crosss */
 		if (unlikely(!md->len)) {
-			trace_printk(" Received page from user [%d](%d)\n", mag_get_full_count(&global_maio.mag[0]), page_ref_count(page));
+			trace_debug(" Received page from user [%d](%d)\n", mag_get_full_count(&global_maio.mag[0]), page_ref_count(page));
 			put_page(page);
 			local_lwm = false;
 
@@ -1135,7 +1154,7 @@ static int maio_post_tx_task(void *state)
 
         while (!kthread_should_stop()) {
 		trace_debug("[%d]Running...\n", smp_processor_id());
-		while (maio_post_tx_page(state) == TX_BATCH_SIZE); // XMIT as long as there is work to be done.
+		while (maio_post_tx_page(state)); // XMIT as long as there is work to be done.
 
 		trace_debug("[%d]sleeping...\n", smp_processor_id());
                 set_current_state(TASK_UNINTERRUPTIBLE);
@@ -1186,9 +1205,22 @@ static inline ssize_t maio_enable(struct file *file, const char __user *buf,
 
 	kfree(kbuff);
 
-	if (val == 0 || val == 1)
+	if (val == 0 || val == 1) {
+		struct net_device *dev, *iter_dev;
+		struct list_head *iter;
+
+		if ( !(dev = dev_get_by_index(&init_net, dev_idx)))
+			return -ENODEV;
+
+		if (netif_is_bond_slave(dev))
+			return -EINVAL;
+
 		maio_dev_configured[dev_idx] = val;
-	else
+
+		netdev_for_each_lower_dev(dev, iter_dev, iter) {
+			maio_dev_configured[iter_dev->ifindex] = true;
+		}
+	} else
 		return -EINVAL;
 #if 0
 	if (val)
@@ -1237,7 +1269,7 @@ static int maio_post_napi_page(struct maio_tx_thread *tx_thread/*, struct napi_s
 
 		if (unlikely( ! page_ref_count(page))) {
 			if (unlikely(get_page_state(page))) {
-				pr_err("TX] Zero fefcount page %llx(state %llx)[%d] addr %llx -- reseting \n",
+				pr_err("TX] Zero refcount page %llx(state %llx)[%d] addr %llx -- reseting \n",
 					(u64)page, get_page_state(page), page_ref_count(page), (u64)kaddr);
 				panic("Illegal page state\n");
 			}
@@ -1252,7 +1284,7 @@ static int maio_post_napi_page(struct maio_tx_thread *tx_thread/*, struct napi_s
 				set_maio_is_io(page);
 				set_page_state(page, MAIO_POISON); // Need to add on NEW USER pages.
 
-				page = maio_alloc_page();
+				page = __maio_alloc_page();
 				if (!page)
 					return 0;
 
@@ -1731,7 +1763,7 @@ static int maio_map_show(struct seq_file *m, void *v)
         return 0;
 }
 
-#define MAIO_VERSION	"v0.7-vlan"
+#define MAIO_VERSION	"v0.9-teardown"
 static int maio_version_show(struct seq_file *m, void *v)
 {
 	seq_printf(m, "%s\n", MAIO_VERSION);
