@@ -19,13 +19,19 @@ void func(int sockfd)
         int n;
         // infinite loop for chat
         for (;;) {
-                read(sockfd, buff, sizeof(buff));
+                recv(sockfd, buff, sizeof(buff), 0);
         }
 }
 
 // Driver function
-int main()
+int main(int argc, char** argv)
 {
+	uint port;
+	if(argc == 1) port = PORT;
+	else port = strtol(argv[1], NULL, 10);
+	printf("listening on port %d\n", port);
+
+
         int sockfd, connfd;
         unsigned int len;
         struct sockaddr_in servaddr, cli;
@@ -43,7 +49,7 @@ int main()
         // assign IP, PORT
         servaddr.sin_family = AF_INET;
         servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
-        servaddr.sin_port = htons(PORT);
+        servaddr.sin_port = htons(port);
 
         // Binding newly created socket to given IP and verification
         if ((bind(sockfd, (SA*)&servaddr, sizeof(servaddr))) != 0) {

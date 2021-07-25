@@ -8,45 +8,50 @@ An example of creating a TCP socket and sending Zero-Copy I/O
 #include "user_maio.h"
 
 #define PAGE_CNT	512
+#define CHUNK_NUM	2048
 
-static void *chunk[2048];
+const int K_CLIENTS = 1;
+uint32_t port = 8080;
+
+const int K_CHUNK_SIZE = 4<<12;
+void *chunk[CHUNK_NUM];
 
 int main(void)
 {
-	uint32_t dip = STR_IP(10,5,3,4);
-	uint32_t port = 5559;
-
-	int idx, idx2, len = 0, i, j, slen = 0;
+	uint32_t dip = STR_IP(10,128,0,3);
+	int idxs[K_CLIENTS];
 
 	/* Init Mem*/
 	void *cache = init_hp_memory(PAGE_CNT);
 	printf("init memory and get page %p\n", cache);
 
 	/* create + connect */
-	idx = create_connected_socket(dip, port);
-	printf("Connected maio sock =%d to port %d\n", idx, port);
-
-	++port;
-	idx2 = create_connected_socket(dip, port);
-	printf("Connected maio sock =%d to port %d\n", idx2, port);
-	/* init ring */
-	init_tcp_ring(idx, cache);
-	init_tcp_ring(idx2, cache);
-
-	/* prep mem for I/O */
-	for (j = 0; j < 2048; j++) {
-		chunk[j] = alloc_chunk(cache);
-		if (!chunk[j]) {
-			printf("Failed to alloc chunk %d\n", j);
-			exit(-1);
-		}
+	for(int i = 0; i < K_CLIENTS; ++i) {
+		int idx = create_connected_socket(dip, port);
+		printf("Connected maio sock =%d to port %d\n", idx, port);
+		idxs[i] = idx;
+		init_tcp_ring(idx, cache);
+		++port;
 	}
 
-	slen = (4 << 12);
-	printf("send loop [%d]\n", slen);
+
+	/* init ring */
+	// init_tcp_ring(idx, cache);
+	// init_tcp_ring(idx2, cache);
+
+	/* prep mem for I/O */
+	for (int i = 0; i < CHUNK_NUM; ++i) {
+		chunk[i] = alloc_chunk(cache);
+	}
+
+	printf("send loop [%d]\n", K_CHUNK_SIZE);
+	int next_chunk = 0;
 	while (1) {
-		send_buffer(idx, chunk[0], slen, 1);
-		send_buffer(idx2, chunk[0], slen, 1);
+		for(int i = 0; i < K_CLIENTS; ++i) {
+			send_buffer(idxs[i], chunk[next_chunk++], K_CHUNK_SIZE, 1);
+			if(next_chunk == CHUNK_NUM)
+				next_chunk = 0;
+		}
 	};
 
 	return 0;
