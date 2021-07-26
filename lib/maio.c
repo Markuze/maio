@@ -1180,10 +1180,42 @@ static inline int create_threads(void)
 	return 0;
 }
 
+static inline size_t __maio_change_state(size_t val, size_t dev_idx)
+{
+	pr_err("%s: dev %lu:: Now: [%s] was %s\n", __FUNCTION__, dev_idx, val ? "Configured" : "Off", maio_configured(dev_idx) ? "Configured" : "Off");
+	trace_printk("%s: dev %lu:: Now: [%s] was %s\n", __FUNCTION__, dev_idx, val ? "Configured" : "Off", maio_configured(dev_idx) ? "Configured" : "Off");
+
+
+	if (val == 0 || val == 1) {
+		struct net_device *dev, *iter_dev;
+		struct list_head *iter;
+
+		if ( !(dev = dev_get_by_index(&init_net, dev_idx)))
+			return -ENODEV;
+
+		if (netif_is_bond_slave(dev))
+			return -EINVAL;
+
+		maio_dev_configured[dev_idx] = val;
+
+		netdev_for_each_lower_dev(dev, iter_dev, iter) {
+			maio_dev_configured[iter_dev->ifindex] = val;
+		}
+	} else
+		return -EINVAL;
+#if 0
+	if (val)
+		napi_enable(&maio_tx_threads[dev_idx].napi);
+	else
+		napi_disable(&maio_tx_threads[dev_idx].napi);
+#endif
+	return 0;
+}
+
 static inline ssize_t maio_enable(struct file *file, const char __user *buf,
                                     size_t size, loff_t *_pos)
 {	char	*kbuff, *cur;
-	size_t 	val, dev_idx;
+	size_t 	val, dev_idx, rc;
 
 	if (size < 1 || size >= PAGE_SIZE)
 	        return -EINVAL;
@@ -1200,35 +1232,10 @@ static inline ssize_t maio_enable(struct file *file, const char __user *buf,
 		return -ENODEV;
 	}
 
-	pr_err("%s: dev %lu:: Now: [%s] was %s\n", __FUNCTION__, dev_idx, val ? "Configured" : "Off", maio_configured(dev_idx) ? "Configured" : "Off");
-	trace_printk("%s: dev %lu:: Now: [%s] was %s\n", __FUNCTION__, dev_idx, val ? "Configured" : "Off", maio_configured(dev_idx) ? "Configured" : "Off");
-
 	kfree(kbuff);
 
-	if (val == 0 || val == 1) {
-		struct net_device *dev, *iter_dev;
-		struct list_head *iter;
-
-		if ( !(dev = dev_get_by_index(&init_net, dev_idx)))
-			return -ENODEV;
-
-		if (netif_is_bond_slave(dev))
-			return -EINVAL;
-
-		maio_dev_configured[dev_idx] = val;
-
-		netdev_for_each_lower_dev(dev, iter_dev, iter) {
-			maio_dev_configured[iter_dev->ifindex] = true;
-		}
-	} else
-		return -EINVAL;
-#if 0
-	if (val)
-		napi_enable(&maio_tx_threads[dev_idx].napi);
-	else
-		napi_disable(&maio_tx_threads[dev_idx].napi);
-#endif
-	return size;
+	rc = __maio_change_state(val, dev_idx);
+	return rc ? rc : size;
 }
 
 /*x86/boot/string.c*/
@@ -1587,6 +1594,7 @@ static inline void maio_stop(void)
 		if (! maio_devs[i])
 			continue;
 
+		__maio_change_state(0, i);
 		ops = dev->netdev_ops;
 
 		pr_err("Fluishing mem from [%d:%d] %s (%s)\n", i, dev->ifindex, dev->name, ops->ndo_dev_reset ? "Flush" : "NOP");
