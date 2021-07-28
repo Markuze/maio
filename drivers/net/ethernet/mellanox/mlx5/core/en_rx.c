@@ -1117,8 +1117,14 @@ mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq, struct mlx5_cqe64 *cqe,
 		rq->stats->removed_vlan_packets++;
 	}
 
-	if (maio_post_rx_page(rq->netdev, data, cqe_bcnt, vlan_tci, maio_flags))
+	if (maio_post_rx_page(rq->netdev, data, cqe_bcnt, vlan_tci, maio_flags)) {
+		/* Account for bytes received */
+		struct mlx5e_rq_stats *stats = rq->stats;
+
+		stats->packets++;
+		stats->bytes += cqe_bcnt;
 		return NULL; /* page/packet was consumed by MAIO */
+	}
 
 	/* Capture RX here... */
 	rcu_read_lock();
