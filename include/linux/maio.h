@@ -6,6 +6,9 @@
 
 //#include <linux/netdevice.h> //net_device
 
+// unamsk to enabnle async TX for MAIO
+//#define MAIO_ASYNC_TX
+
 #define NUM_MAIO_SIZES	1
 #define HUGE_ORDER	9 /* compound_order of 2MB HP */
 #define HUGE_SHIFT	(HUGE_ORDER + PAGE_SHIFT)
@@ -122,7 +125,9 @@ struct maio_magz {
 struct net_device;
 
 struct maio_tx_thread {
+#ifdef MAIO_ASYNC_TX
 	struct task_struct *thread;
+#endif
 	struct net_device *netdev;
 	unsigned long tx_counter;
         u64 *tx_ring;

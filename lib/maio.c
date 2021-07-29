@@ -86,8 +86,10 @@ static unsigned long maio_mag_lwm  __read_mostly = 1024;
 static unsigned long maio_mag_hwm  __read_mostly = ULONG_MAX;
 static bool lwm_triggered;
 
+#ifdef MAIO_ASYNC_TX
 static int maio_post_tx_task(void *state);
 static int (*threadfn)(void *data) = maio_post_tx_task;
+#endif
 
 static int maio_post_napi_page(struct maio_tx_thread *tx_thread/*, struct napi_struct *napi*/);
 
@@ -1077,9 +1079,10 @@ static inline ssize_t maio_tx(struct file *file, const char __user *buf,
 {
 	char	kbuff[MAIO_TX_KBUFF_SZ], *cur;
 	struct maio_tx_thread *tx_thread;
-	struct task_struct *thread;
 	size_t 	dev_idx, ring_id;
-	unsigned long  val;
+#ifdef MAIO_ASYNC_TX
+	struct task_struct *thread;
+#endif
 
 	if (unlikely(size < 1 || size >= MAIO_TX_KBUFF_SZ))
 	        return -EINVAL;
@@ -1099,14 +1102,19 @@ static inline ssize_t maio_tx(struct file *file, const char __user *buf,
 		return -ENODEV;
 	}
 
-	tx_thread = &maio_tx_threads[dev_idx].tx_thread[ring_id];
-	thread = tx_thread->thread;
+	tx_thread	= &maio_tx_threads[dev_idx].tx_thread[ring_id];
+
+#ifdef MAIO_ASYNC_TX
+	thread		= tx_thread->thread;
 
 	if (thread->state & TASK_NORMAL) {
+		unsigned long  val;
 	        val = wake_up_process(thread);
 	        trace_debug("[%d]wake up thread[state %0lx][%s]\n", smp_processor_id(), thread->state, val ? "WAKING":"UP");
 	}
-	//maio_post_tx_page((void *)idx);
+#else
+	maio_post_tx_page(tx_thread);
+#endif
 
 	return size;
 }
@@ -1149,6 +1157,7 @@ static inline ssize_t maio_napi(struct file *file, const char __user *buf,
 	return size;
 }
 
+#ifdef MAIO_ASYNC_TX
 static int maio_post_tx_task(void *state)
 {
 
@@ -1165,6 +1174,7 @@ static int maio_post_tx_task(void *state)
         }
         return 0;
 }
+#endif
 
 static inline int create_threads(void)
 {
@@ -1498,12 +1508,14 @@ static inline ssize_t init_user_rings(struct file *file, const char __user *buf,
 		tx_thread->dev_idx = dev_idx;
 		tx_thread->ring_id = i;
 		tx_thread->netdev = maio_devs[dev_idx];
+#ifdef MAIO_ASYNC_TX
 		tx_thread->thread = kthread_create(threadfn, tx_thread, "maio_tx_%d_thread_%ld", dev_idx, i);
 		if (IS_ERR(tx_thread->thread)) {
 			pr_err("Failed to create maio_tx_%d_thread_%ld\n", dev_idx, i);
 			/* Clean teardown */
 			return -ENOMEM;
 		}
+#endif
 	}
 
 	setup_maio_napi(dev_idx);
@@ -1596,6 +1608,23 @@ static inline void maio_stop(void)
 
 		__maio_change_state(0, i);
 		ops = dev->netdev_ops;
+#ifdef MAIO_ASYNC_TX
+		for_each_possible_cpu(cpu) {
+			int rc;
+			char task_comm[TASK_COMM_LEN];
+			struct maio_tx_thread *tx_thread = &maio_tx_threads[i].tx_thread[cpu];
+
+
+
+			if (IS_ERR_OR_NULL(tx_thread->thread))
+				continue;
+
+			get_task_comm(task_comm, tx_thread->thread);
+			rc = kthread_stop(tx_thread->thread);
+
+			trace_printk("stopping task %s [%d]\n", task_comm, rc);
+		}
+#endif
 
 		pr_err("Fluishing mem from [%d:%d] %s (%s)\n", i, dev->ifindex, dev->name, ops->ndo_dev_reset ? "Flush" : "NOP");
 		if (ops->ndo_dev_reset) {
