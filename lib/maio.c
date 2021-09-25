@@ -1838,7 +1838,7 @@ static const struct file_operations maio_mtrx_ops = {
 };
 
 static const struct file_operations maio_page_0_ops = {
-        .open      = maio_map_open, /* TODO: Change to func that pirnts the mapped user pages */
+        .open      = maio_map_open, /* TODO: Change to func that prints the mapped user pages */
         .read      = seq_read,
         .llseek    = seq_lseek,
         .release   = single_release,
@@ -1846,7 +1846,7 @@ static const struct file_operations maio_page_0_ops = {
 };
 
 static const struct file_operations maio_page_ops = {
-        .open      = maio_map_open, /* TODO: Change to func that pirnts the mapped user pages */
+        .open      = maio_map_open, /* TODO: Change to func that prints the mapped user pages */
         .read      = seq_read,
         .llseek    = seq_lseek,
         .release   = single_release,
@@ -1854,7 +1854,7 @@ static const struct file_operations maio_page_ops = {
 };
 
 static const struct file_operations maio_stop_ops = {
-        .open      = maio_enable_open, /* TODO: Change to func that pirnts the mapped user pages */
+        .open      = maio_enable_open, /* TODO: Change to func that prints the mapped user pages */
         .read      = seq_read,
         .llseek    = seq_lseek,
         .release   = single_release,
@@ -1862,7 +1862,7 @@ static const struct file_operations maio_stop_ops = {
 };
 
 static const struct file_operations maio_map_ops = {
-        .open      = maio_map_open, /* TODO: Change to func that pirnts the mapped user pages */
+        .open      = maio_map_open, /* TODO: Change to func that prints the mapped user pages */
         .read      = seq_read,
         .llseek    = seq_lseek,
         .release   = single_release,
