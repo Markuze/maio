@@ -1,4 +1,5 @@
 #include <linux/init.h>
+
 #include <linux/magazine.h>
 #include <linux/mm.h>
 #include <linux/slab.h>
@@ -10,6 +11,8 @@
 #include <linux/ctype.h> /*isdigit*/
 #include <linux/ip.h>	/*iphdr*/
 #include <linux/tcp.h>	/*tcphdr*/
+
+#include "io_md.h"
 
 #ifndef assert
 #define assert(expr) 	do { \
@@ -70,7 +73,7 @@ DEFINE_SPINLOCK(head_cache_lock);
 static unsigned long head_cache_size;
 
 /*TODO: Clean up is currently leaking this */
-static struct maio_tx_threads	maio_tx_threads[MAX_DEV_NUM];
+static struct maio_tx_threads	maio_tx_threads[MAX_DEV_NUM] __read_mostly;
 static struct net_device *maio_devs[MAX_DEV_NUM] __read_mostly;
 static struct maio_dev_map dev_map;
 
@@ -928,6 +931,19 @@ struct sk_buff *maio_build_linear_tx_skb(struct net_device *netdev, void *va, si
 	return skb;
 }
 
+static void maio_zc_tx_callback(struct ubuf_info *ubuf, bool zc_success)
+{
+	trace_printk("Hello! TX is %s\n", zc_success ? "SUCCESS": "FAILURE");
+}
+//skb_zcopy_clear
+static inline void maio_set_comp_handler(struct sk_buff *skb, struct io_md *md)
+{
+	md->uarg.callback = maio_zc_tx_callback;
+
+	skb_shinfo(skb)->tx_flags |= SKBTX_DEV_ZEROCOPY;
+	skb_shinfo(skb)->destructor_arg = &md->uarg;
+}
+
 #define TX_BATCH_SIZE	32
 int maio_post_tx_page(void *state)
 {
@@ -945,7 +961,7 @@ int maio_post_tx_page(void *state)
 
 	while ((uaddr = tx_ring_entry(tx_thread))) {
 		struct sk_buff *skb;
-		unsigned len, size;
+		unsigned len;
 		void 		*kaddr	= uaddr2addr(uaddr);
 		struct page     *page	= virt_to_page(kaddr);
 
@@ -1034,13 +1050,12 @@ int maio_post_tx_page(void *state)
 //TODO: Consider adding ERR flags to ring entry.
 
 		len 	= md->len + SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
-		size 	= IO_MD_OFF - ((u64)kaddr & (PAGE_SIZE - 1));
 
 		show_io(kaddr, "TX");
 		trace_debug("TX %llx/%llx [%d]from user %llx [#%d]\n",
 				(u64)kaddr, (u64)page, page_ref_count(page),
 				(u64)uaddr, cnt);
-		if (unlikely(((uaddr & (PAGE_SIZE -1)) + len) > PAGE_SIZE)) {
+		if (unlikely(((uaddr & (~PAGE_MASK)) + len) > PAGE_SIZE)) {
 			pr_err("Buffer to Long [%llx] len %u klen = %u\n", uaddr, md->len, len);
 			continue;
 		}
@@ -1054,8 +1069,9 @@ int maio_post_tx_page(void *state)
 
 		if (md->flags & MAIO_STATUS_VLAN_VALID)
 			__vlan_hwaccel_put_tag(skb, htons(ETH_P_8021Q), md->vlan_tci);
-		//get_page(virt_to_page(kaddr));
+		//get_page(page);
 		skb_batch[cnt++] = skb;
+		maio_set_comp_handler(skb, md);
 
 		if (unlikely(cnt >= TX_BATCH_SIZE))
 			break;
@@ -1800,7 +1816,7 @@ static int maio_map_show(struct seq_file *m, void *v)
         return 0;
 }
 
-#define MAIO_VERSION	"v0.9-no-async"
+#define MAIO_VERSION	"v0.95-zc-retarnsmit"
 static int maio_version_show(struct seq_file *m, void *v)
 {
 	seq_printf(m, "%s\n", MAIO_VERSION);
