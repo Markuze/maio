@@ -886,8 +886,21 @@ unlock:
 	return err;
 }
 
-#define tx_ring_entry(qp) 	(qp)->tx_ring[(qp)->tx_counter & ((qp)->tx_sz -1)]
-#define advance_tx_ring(qp)	(qp)->tx_ring[(qp)->tx_counter++ & ((qp)->tx_sz -1)] = 0
+//Uaddr in TX ring is valid when lsb is set.
+static inline u64 tx_ring_entry(struct maio_tx_thread *tx_thread)
+{
+	u16 idx = tx_thread->tx_counter & (tx_thread->tx_sz -1);
+	u64 uaddr = tx_thread->tx_ring[idx];
+	return  (uaddr & 0x1) ? (uaddr & (~0x1)) : 0;
+}
+
+//Zero our LSB and advance counter.
+static inline void advance_tx_ring(struct maio_tx_thread *tx_thread)
+{
+	u16 idx = tx_thread->tx_counter & (tx_thread->tx_sz -1);
+	tx_thread->tx_ring[idx] = (tx_thread->tx_ring[idx] & (~0x1));
+	++tx_thread->tx_counter;
+}
 
 struct sk_buff *maio_build_linear_rx_skb(struct net_device *netdev, void *va, size_t size)
 {
