@@ -946,12 +946,26 @@ struct sk_buff *maio_build_linear_tx_skb(struct net_device *netdev, void *va, si
 
 static void maio_zc_tx_callback(struct ubuf_info *ubuf, bool zc_success)
 {
-	trace_printk("Hello! TX is %s\n", zc_success ? "SUCCESS": "FAILURE");
+	struct io_md *md = container_of(ubuf, struct io_md, uarg);
+	int in_transit = 1;
+
+	if (!refcount_dec_and_test(&ubuf->refcnt)) {
+		in_transit = 0;
+	}
+
+	md->in_transit = in_transit;
+	trace_printk("%s: TX in_transit %s [%d]\n", __FUNCTION__,
+			in_transit ? "YES": "NO", refcount_read(&ubuf->refcnt));
 }
 //skb_zcopy_clear
 static inline void maio_set_comp_handler(struct sk_buff *skb, struct io_md *md)
 {
+	md->in_transit = 1;
 	md->uarg.callback = maio_zc_tx_callback;
+	refcount_inc(&md->uarg.refcnt);
+
+	trace_printk("%s: TX in_transit %s [%d]\n", __FUNCTION__,
+			md->in_transit ? "YES": "NO", refcount_read(&md->uarg.refcnt));
 
 	skb_shinfo(skb)->tx_flags |= SKBTX_DEV_ZEROCOPY;
 	skb_shinfo(skb)->destructor_arg = &md->uarg;
@@ -987,6 +1001,7 @@ int maio_post_tx_page(void *state)
 		}
 
 		if (unlikely( ! page_ref_count(page))) {
+			/* This check only makes sense if pages are zeroed out (?) */
 			if (unlikely(get_page_state(page))) {
 				pr_err("TX] Zero refcount page %llx(state %llx)[%d] addr %llx -- reseting \n",
 					(u64)page, get_page_state(page), page_ref_count(page), (u64)kaddr);
@@ -1082,7 +1097,7 @@ int maio_post_tx_page(void *state)
 
 		if (md->flags & MAIO_STATUS_VLAN_VALID)
 			__vlan_hwaccel_put_tag(skb, htons(ETH_P_8021Q), md->vlan_tci);
-		//get_page(page);
+		get_page(page);
 		skb_batch[cnt++] = skb;
 		maio_set_comp_handler(skb, md);
 

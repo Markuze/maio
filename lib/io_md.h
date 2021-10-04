@@ -10,10 +10,14 @@
 
 struct io_md {
 	u64 state;
+
 	u32 len;
 	u32 poison;
 	u16 vlan_tci;
 	u16 flags;
+
+	u32 user_bits;
+	u16 in_transit;
 	struct ubuf_info uarg ____cacheline_aligned_in_smp;
 };
 
