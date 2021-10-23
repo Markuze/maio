@@ -681,22 +681,27 @@ static inline int filter_packet(void *addr)
 	return maio_filter(addr);
 }
 
+#define rx_ring_enrty(qp)	(qp)->rx_ring[(qp)->rx_counter & ((qp)->rx_sz -1)]
+#define clear_rx_ring_entry(qp)	(qp)->rx_ring[(qp)->rx_counter & ((qp)->rx_sz -1)] = 0
+#define post_rx_ring(qp, val)	(qp)->rx_ring[(qp)->rx_counter++ & ((qp)->rx_sz -1)] = val
+
 //TODO: Add support for vlan detection __vlan_hwaccel
 static inline int __maio_post_rx_page(struct net_device *netdev, struct page *page,
 					void *addr, u32 len, u16 vlan_tci, u16 flags)
 {
 	u64 qp_idx = get_rx_qp_idx(netdev);
+	u64 ring_entry;
 	struct page *refill = NULL;
 	struct io_md *md;
 	struct percpu_maio_dev_qp *dev_qp = this_cpu_ptr(&maio_dev_qp);
 	struct percpu_maio_qp *qp;
 
-	if (unlikely(!maio_configured(qp_idx)))
-		return 0;
-
 	if (qp_idx == -1) {
 		return 0;
 	}
+
+	if (unlikely(!maio_configured(qp_idx)))
+		return 0;
 
 	qp = &dev_qp->qp[qp_idx];
 
@@ -706,7 +711,35 @@ static inline int __maio_post_rx_page(struct net_device *netdev, struct page *pa
 	}
 
 send_the_page:
-	if (qp->rx_ring[qp->rx_counter & (qp->rx_sz -1)]) {
+	ring_entry = rx_ring_enrty(qp);
+
+	if (likely(ring_entry & 0x1)) {
+		void *kaddr = uaddr2addr(ring_entry & PAGE_MASK);
+		struct page *page = page_address(kaddr);
+		static unsigned long verbose;
+
+		if (PageHead(page)) {
+			//trace_debug("[%ld]Caching %llx [%llx]  - P %llx[%d]\n", len, (u64 )kbase, meta->bufs[len],
+			//	(u64)page, page_ref_count(page));
+			//maio_cache_head(page);
+			set_maio_is_io(page);
+			set_page_state(page, MAIO_POISON); // Need to add on NEW USER pages.
+			assert(!is_maio_page(page));
+		} else {
+			//TODO: handle head page.
+			assert(is_maio_page(page));
+			assert(get_maio_elem_order(__compound_head(page, 0)) == 0);
+			set_page_count(page, 0);
+			set_page_state(page, MAIO_PAGE_FREE);
+			maio_free_elem(kaddr, 0);
+			clear_rx_ring_entry(qp);
+		}
+		if (!(verbose++ & 0xf))
+			trace_printk("at RX refill...[%lu]", verbose);
+	}
+
+	ring_entry = rx_ring_enrty(qp);
+	if (ring_entry) {
 		trace_printk("[%d]User to slow. dropping post of %llx:%llx\n",
 				smp_processor_id(), (u64)addr, addr2uaddr(addr));
 		return 0;
@@ -721,8 +754,7 @@ send_the_page:
 		user should check if address is MAIO_POISON,
 		this means that this is a request for a refill packet.
 		*/
-		qp->rx_ring[qp->rx_counter & (qp->rx_sz -1)] = MAIO_POISON;
-		++qp->rx_counter;
+		post_rx_ring(qp, MAIO_POISON);
 
 		goto send_the_page;
 	}
@@ -744,8 +776,7 @@ send_the_page:
 		user should check if address is page aligned, then md is not present
 		this means that this is a refill packet.
 		*/
-		qp->rx_ring[qp->rx_counter & (qp->rx_sz -1)] = addr2uaddr(buff);
-		++qp->rx_counter;
+		post_rx_ring(qp, addr2uaddr(buff));
 
 		goto send_the_page;
 	}
@@ -781,11 +812,9 @@ send_the_page:
 		get_page(page);
 	}
 #endif
-	if (unlikely(get_page_state(page) != MAIO_PAGE_RX)) {
-		pr_err("ERROR: Page %llx state %llx uaddr %llx\n", (u64)page, get_page_state(page), get_maio_uaddr(page));
-	}
 
 	assert(get_page_state(page) == MAIO_PAGE_RX);
+
 	set_page_state(page, MAIO_PAGE_USER);
 	assert(uaddr2addr(addr2uaddr(addr)) == addr);
 	md = virt2io_md(addr);
@@ -796,8 +825,7 @@ send_the_page:
 
 	show_io(addr, "RX");
 #if 1
-	qp->rx_ring[qp->rx_counter & (qp->rx_sz -1)] = addr2uaddr(addr);
-	++qp->rx_counter;
+	post_rx_ring(qp, addr2uaddr(addr));
 #else
 /***************
 	Testing NAPI code:
@@ -1070,7 +1098,7 @@ int maio_post_tx_page(void *state)
 		/* A refill page from user following an lwm crosss */
 		if (unlikely(!md->len)) {
 			trace_debug(" Received page from user [%d](%d)\n", mag_get_full_count(&global_maio.mag[0]), page_ref_count(page));
-			put_page(page);
+			put_page(page); /*TODO:  Is this Valid?*/
 			local_lwm = false;
 
 			continue;
