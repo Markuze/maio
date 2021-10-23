@@ -977,13 +977,16 @@ static void maio_zc_tx_callback(struct ubuf_info *ubuf, bool zc_success)
 	struct io_md *md = container_of(ubuf, struct io_md, uarg);
 	int in_transit = 1;
 
-	if (!refcount_dec_and_test(&ubuf->refcnt)) {
+	static u16 dbg;
+
+	if (refcount_dec_and_test(&ubuf->refcnt)) {
 		in_transit = 0;
 	}
 
 	md->in_transit = in_transit;
-	trace_printk("%s: TX in_transit %s [%d]\n", __FUNCTION__,
-			in_transit ? "YES": "NO", refcount_read(&ubuf->refcnt));
+	md->in_transit_dbg = ++dbg;
+	trace_printk("%s: TX in_transit %s [%d]<%d>\n", __FUNCTION__,
+			in_transit ? "YES": "NO", refcount_read(&ubuf->refcnt), dbg);
 }
 //skb_zcopy_clear
 static inline void maio_set_comp_handler(struct sk_buff *skb, struct io_md *md)

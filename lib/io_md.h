@@ -18,7 +18,8 @@ struct io_md {
 	u16 flags;
 
 	u32 user_bits;
-	u16 in_transit;
+	volatile u16 in_transit;
+	volatile u16 in_transit_dbg;
 	struct ubuf_info uarg ____cacheline_aligned_in_smp;
 };
 
