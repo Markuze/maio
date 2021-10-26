@@ -85,7 +85,7 @@ DEFINE_PER_CPU(struct percpu_maio_dev_qp, maio_dev_qp);
 static struct rb_root mtt_tree = RB_ROOT;
 static struct umem_region_mtt *cached_mtt;
 
-static unsigned long maio_mag_lwm  __read_mostly = 1024;
+static unsigned long maio_mag_lwm  __read_mostly = 128;
 static unsigned long maio_mag_hwm  __read_mostly = ULONG_MAX;
 static bool lwm_triggered;
 
@@ -379,6 +379,13 @@ static inline void __maio_free(struct page *page, void *addr)
 			memcpy(virt2io_md(addr), kaddr2shadow_md(addr), sizeof(struct io_md));
 		}
 	}
+	if (unlikely(virt2io_md(addr)->state == MAIO_PAGE_TX)) {
+		pr_err("%s Zero refcount page %llx(state %llx)[%d] rc %d\n", __FUNCTION__,
+			(u64)page, get_page_state(page), page_ref_count(page),page_ref_count(page));
+		panic("Illegal page state! \n");
+	}
+	//trace_printk("should I be here? page %llx(state %llx)[%d] rc %d\n",
+	//	(u64)page, get_page_state(page), page_ref_count(page),page_ref_count(page));
 	assert(get_page_state(page) & MAIO_PAGE_IO);
 
 	set_page_state(page, MAIO_PAGE_FREE);
@@ -826,6 +833,11 @@ send_the_page:
 	show_io(addr, "RX");
 #if 1
 	post_rx_ring(qp, addr2uaddr(addr));
+	trace_debug("%d:RX %s:%llx[%u]%llx{%d}\n", smp_processor_id(),
+			page ? "COPY" : "ZC",
+			(u64)addr, len,
+			addr2uaddr(addr), page_ref_count(page));
+
 #else
 /***************
 	Testing NAPI code:
@@ -985,8 +997,8 @@ static void maio_zc_tx_callback(struct ubuf_info *ubuf, bool zc_success)
 
 	md->in_transit = in_transit;
 	md->in_transit_dbg = ++dbg;
-	trace_printk("%s: TX in_transit %s [%d]<%d>\n", __FUNCTION__,
-			in_transit ? "YES": "NO", refcount_read(&ubuf->refcnt), dbg);
+	//trace_printk("%s: TX in_transit %s [%d]<%d>\n", __FUNCTION__,
+	//		in_transit ? "YES": "NO", refcount_read(&ubuf->refcnt), dbg);
 }
 //skb_zcopy_clear
 static inline void maio_set_comp_handler(struct sk_buff *skb, struct io_md *md)
@@ -995,8 +1007,8 @@ static inline void maio_set_comp_handler(struct sk_buff *skb, struct io_md *md)
 	md->uarg.callback = maio_zc_tx_callback;
 	refcount_inc(&md->uarg.refcnt);
 
-	trace_printk("%s: TX in_transit %s [%d]\n", __FUNCTION__,
-			md->in_transit ? "YES": "NO", refcount_read(&md->uarg.refcnt));
+	//trace_printk("%s: TX in_transit %s [%d]\n", __FUNCTION__,
+	//		md->in_transit ? "YES": "NO", refcount_read(&md->uarg.refcnt));
 
 	skb_shinfo(skb)->tx_flags |= SKBTX_DEV_ZEROCOPY;
 	skb_shinfo(skb)->destructor_arg = &md->uarg;
@@ -1077,15 +1089,14 @@ int maio_post_tx_page(void *state)
 		}
 
 		md = virt2io_md(kaddr);
-
+#if 0
+		//no longer a valid check with user zc retrasmit support
 		if (unlikely(md->state > MAIO_PAGE_USER)) {
 			pr_err("%d:%s:%llx :%s\n", smp_processor_id(), __FUNCTION__, (u64)page, PageHead(page)?"HEAD":"Tail");
 			pr_err("ERROR: Page %llx %s state %llx uaddr %llx\n", (u64)page, page == virt_to_page(md) ? "": "EHH... A PROBLEM HUSTON", get_page_state(page), get_maio_uaddr(page));
 			dump_io_md(md, "txMD");
 		}
-
-		set_page_state(page, MAIO_PAGE_TX);
-
+#endif
 		if (unlikely(md->poison != MAIO_POISON)) {
 			pr_err("NO MAIO-POISON <%x>Found [%llx] -- Please make sure to put the buffer\n"
 				"page %llx: %s:%s %llx ",
@@ -1100,12 +1111,15 @@ int maio_post_tx_page(void *state)
 
 		/* A refill page from user following an lwm crosss */
 		if (unlikely(!md->len)) {
-			trace_debug(" Received page from user [%d](%d)\n", mag_get_full_count(&global_maio.mag[0]), page_ref_count(page));
+			//trace_printk(" Received page from user [%d](%d)\n", mag_get_full_count(&global_maio.mag[0]), page_ref_count(page));
+			set_page_state(page, MAIO_PAGE_RX);
 			put_page(page); /*TODO:  Is this Valid?*/
 			local_lwm = false;
 
 			continue;
 		}
+		set_page_state(page, MAIO_PAGE_TX);
+
 //TODO: Consider adding ERR flags to ring entry.
 
 		len 	= md->len + SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
@@ -1114,6 +1128,7 @@ int maio_post_tx_page(void *state)
 		trace_debug("TX %llx/%llx [%d]from user %llx [#%d]\n",
 				(u64)kaddr, (u64)page, page_ref_count(page),
 				(u64)uaddr, cnt);
+
 		if (unlikely(((uaddr & (~PAGE_MASK)) + len) > PAGE_SIZE)) {
 			pr_err("Buffer to Long [%llx] len %u klen = %u\n", uaddr, md->len, len);
 			continue;
@@ -1875,7 +1890,7 @@ static int maio_map_show(struct seq_file *m, void *v)
         return 0;
 }
 
-#define MAIO_VERSION	"v0.95-zc-retarnsmit"
+#define MAIO_VERSION	"v0.96-zc-retarnsmit"
 static int maio_version_show(struct seq_file *m, void *v)
 {
 	seq_printf(m, "%s\n", MAIO_VERSION);
