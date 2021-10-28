@@ -17,9 +17,18 @@ struct io_md {
 	u16 vlan_tci;
 	u16 flags;
 
-	u32 user_bits;
+	union {
+		u32 user_bits;
+		struct {
+			u16 tx_cnt;
+			u16 tx_compl;
+		};
+	};
 	volatile u16 in_transit;
 	volatile u16 in_transit_dbg;
+	u32 line;
+	u64 prev_state;
+	u32 prev_line;
 	struct ubuf_info uarg ____cacheline_aligned_in_smp;
 };
 

@@ -164,11 +164,15 @@ static inline struct io_md* page2io_md(struct page *page)
 */
 }
 
-static inline void set_page_state(struct page *page, u64 new_state)
+static inline void __set_page_state(struct page *page, u64 new_state, u32 line)
 {
 	struct io_md *md = page2io_md(page);
+	md->prev_state = md->state;
+	md->prev_line  = md->line;
 	md->state = new_state;
+	md->line = line;
 }
+#define set_page_state(p,s)	__set_page_state(p,s, __LINE__)
 
 static inline u64 get_page_state(struct page *page)
 {
@@ -729,7 +733,7 @@ send_the_page:
 			//trace_debug("[%ld]Caching %llx [%llx]  - P %llx[%d]\n", len, (u64 )kbase, meta->bufs[len],
 			//	(u64)page, page_ref_count(page));
 			//maio_cache_head(page);
-			set_maio_is_io(page);
+			//set_maio_is_io(page);
 			set_page_state(page, MAIO_POISON); // Need to add on NEW USER pages.
 			assert(!is_maio_page(page));
 		} else {
@@ -739,8 +743,14 @@ send_the_page:
 			set_page_count(page, 0);
 			set_page_state(page, MAIO_PAGE_FREE);
 			maio_free_elem(kaddr, 0);
-			clear_rx_ring_entry(qp);
 		}
+		clear_rx_ring_entry(qp);
+
+		trace_printk("TX] Zero refcount page %llx(state %llx [%u]<%llx>[%u] )[%d] addr %llx -- PANIC\n"
+				"TX] transit %d transitcnt %u [%d/%d]\n",
+				(u64)page, get_page_state(page), md->line,
+				md->prev_state, md->prev_line, page_ref_count(page), (u64)kaddr,
+				md->in_transit, md->in_transit_dbg, md->tx_cnt, md->tx_compl);
 		if (!(verbose++ & 0xf))
 			trace_printk("at RX refill...[%lu]", verbose);
 	}
@@ -754,7 +764,7 @@ send_the_page:
 
 	/* LWM crossed ask user to return some mem via TX */
 	if (unlikely(maio_lwm_crossed() && !refill)) {
-		trace_debug("LWM crossed [%d], sending request\n", mag_get_full_count(&global_maio.mag[0]));
+		trace_printk("LWM crossed [%d], sending request\n", mag_get_full_count(&global_maio.mag[0]));
 		refill = (void *)MAIO_POISON;
 
 		/*
@@ -769,7 +779,7 @@ send_the_page:
 	/* HWM crossed return some mem to user */
 	if (unlikely(maio_hwm_crossed() && !refill)) {
 		void *buff;
-		trace_debug("HWM crossed [%d], sending page to user\n", mag_get_full_count(&global_maio.mag[0]));
+		trace_printk("HWM crossed [%d], sending page to user\n", mag_get_full_count(&global_maio.mag[0]));
 		//if hwm was crossed
 		refill = __maio_alloc_page();
 		if (!unlikely(!refill))
@@ -833,7 +843,7 @@ send_the_page:
 	show_io(addr, "RX");
 #if 1
 	post_rx_ring(qp, addr2uaddr(addr));
-	trace_debug("%d:RX %s:%llx[%u]%llx{%d}\n", smp_processor_id(),
+	trace_prtintk("%d:RX %s:%llx[%u]%llx{%d}\n", smp_processor_id(),
 			page ? "COPY" : "ZC",
 			(u64)addr, len,
 			addr2uaddr(addr), page_ref_count(page));
@@ -989,16 +999,14 @@ static void maio_zc_tx_callback(struct ubuf_info *ubuf, bool zc_success)
 	struct io_md *md = container_of(ubuf, struct io_md, uarg);
 	int in_transit = 1;
 
-	static u16 dbg;
-
 	if (refcount_dec_and_test(&ubuf->refcnt)) {
 		in_transit = 0;
 	}
 
 	md->in_transit = in_transit;
-	md->in_transit_dbg = ++dbg;
-	//trace_printk("%s: TX in_transit %s [%d]<%d>\n", __FUNCTION__,
-	//		in_transit ? "YES": "NO", refcount_read(&ubuf->refcnt), dbg);
+	++md->in_transit_dbg;
+	trace_printk("%s: TX in_transit %s [%d]<%d>\n", __FUNCTION__,
+			in_transit ? "YES": "NO", refcount_read(&ubuf->refcnt), dbg);
 }
 //skb_zcopy_clear
 static inline void maio_set_comp_handler(struct sk_buff *skb, struct io_md *md)
@@ -1046,8 +1054,12 @@ int maio_post_tx_page(void *state)
 		if (unlikely( ! page_ref_count(page))) {
 			/* This check only makes sense if pages are zeroed out (?) */
 			if (unlikely(get_page_state(page))) {
-				pr_err("TX] Zero refcount page %llx(state %llx)[%d] addr %llx -- reseting \n",
-					(u64)page, get_page_state(page), page_ref_count(page), (u64)kaddr);
+				md = virt2io_md(kaddr);
+				pr_err("TX] Zero refcount page %llx(state %llx [%u]<%llx>[%u] )[%d] addr %llx -- PANIC\n"
+					"TX] transit %d transitcnt %u [%d/%d]\n",
+					(u64)page, get_page_state(page), md->line,
+					md->prev_state, md->prev_line, page_ref_count(page), (u64)kaddr,
+					md->in_transit, md->in_transit_dbg, md->tx_cnt, md->tx_compl);
 				panic("Illegal page state\n");
 			}
 			init_page_count(page);
@@ -1058,7 +1070,7 @@ int maio_post_tx_page(void *state)
 			if (PageHead(page)) {
 				void *buff;
 
-				set_maio_is_io(page);
+				//set_maio_is_io(page);
 				set_page_state(page, MAIO_POISON); // Need to add on NEW USER pages.
 
 				page = __maio_alloc_page();
@@ -1111,9 +1123,19 @@ int maio_post_tx_page(void *state)
 
 		/* A refill page from user following an lwm crosss */
 		if (unlikely(!md->len)) {
-			//trace_printk(" Received page from user [%d](%d)\n", mag_get_full_count(&global_maio.mag[0]), page_ref_count(page));
-			set_page_state(page, MAIO_PAGE_RX);
-			put_page(page); /*TODO:  Is this Valid?*/
+			trace_printk("TX] Zero refcount page %llx(state %llx [%u]<%llx>[%u] )[%d] addr %llx -- PANIC\n"
+					"TX] transit %d transitcnt %u [%d/%d]\n",
+					(u64)page, get_page_state(page), md->line,
+					md->prev_state, md->prev_line, page_ref_count(page), (u64)kaddr,
+					md->in_transit, md->in_transit_dbg, md->tx_cnt, md->tx_compl);
+
+			//set_page_state(page, MAIO_PAGE_RX);
+			//put_page(page); /*TODO:  Is this Valid?*/
+
+			set_page_count(page, 0);
+			set_page_state(page, MAIO_PAGE_FREE);
+			maio_free_elem(kaddr, 0);
+
 			local_lwm = false;
 
 			continue;
@@ -1125,7 +1147,7 @@ int maio_post_tx_page(void *state)
 		len 	= md->len + SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
 
 		show_io(kaddr, "TX");
-		trace_debug("TX %llx/%llx [%d]from user %llx [#%d]\n",
+		trace_printk("TX %llx/%llx [%d]from user %llx [#%d]\n",
 				(u64)kaddr, (u64)page, page_ref_count(page),
 				(u64)uaddr, cnt);
 
@@ -1388,7 +1410,7 @@ static int maio_post_napi_page(struct maio_tx_thread *tx_thread/*, struct napi_s
 			if (PageHead(page)) {
 				void *buff;
 
-				set_maio_is_io(page);
+				//set_maio_is_io(page);
 				set_page_state(page, MAIO_POISON); // Need to add on NEW USER pages.
 
 				page = __maio_alloc_page();
@@ -1646,7 +1668,7 @@ static inline ssize_t maio_add_pages_0(struct file *file, const char __user *buf
 			//trace_debug("[%ld]Caching %llx [%llx]  - P %llx[%d]\n", len, (u64 )kbase, meta->bufs[len],
 			//	(u64)page, page_ref_count(page));
 			//maio_cache_head(page);
-			set_maio_is_io(page);
+			//set_maio_is_io(page);
 			set_page_state(page, MAIO_POISON); // Need to add on NEW USER pages.
 			assert(!is_maio_page(page));
 			//memset(page_address(page), 0, PAGE_SIZE);

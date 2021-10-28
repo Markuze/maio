@@ -832,7 +832,7 @@ static inline void maio_get_page(struct page *page)
 static inline void set_maio_is_io(struct page *page)
 {
 	page = __compound_head(page, 0);
-	page[1].uaddr |= IS_MAIO_MASK;
+	//page[1].uaddr |= IS_MAIO_MASK;
 }
 
 static inline void set_maio_uaddr(struct page *page, u64 uaddr)
