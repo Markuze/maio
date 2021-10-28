@@ -746,7 +746,8 @@ send_the_page:
 		}
 		clear_rx_ring_entry(qp);
 
-		trace_printk("TX] Zero refcount page %llx(state %llx [%u]<%llx>[%u] )[%d] addr %llx -- PANIC\n"
+		md = virt2io_md(addr);
+		trace_printk("TX] Zero refcount page %llx(state %llx [%u]<%llx>[%u] )[%d] addr %llx -- REFILL\n"
 				"TX] transit %d transitcnt %u [%d/%d]\n",
 				(u64)page, get_page_state(page), md->line,
 				md->prev_state, md->prev_line, page_ref_count(page), (u64)kaddr,
@@ -843,7 +844,7 @@ send_the_page:
 	show_io(addr, "RX");
 #if 1
 	post_rx_ring(qp, addr2uaddr(addr));
-	trace_prtintk("%d:RX %s:%llx[%u]%llx{%d}\n", smp_processor_id(),
+	trace_printk("%d:RX %s:%llx[%u]%llx{%d}\n", smp_processor_id(),
 			page ? "COPY" : "ZC",
 			(u64)addr, len,
 			addr2uaddr(addr), page_ref_count(page));
@@ -944,11 +945,21 @@ static inline u64 tx_ring_entry(struct maio_tx_thread *tx_thread)
 	return  (uaddr & 0x1) ? (uaddr & (~0x1)) : 0;
 }
 
-//Zero our LSB and advance counter.
+//Zero out LSB and advance counter.
 static inline void advance_tx_ring(struct maio_tx_thread *tx_thread)
 {
 	u16 idx = tx_thread->tx_counter & (tx_thread->tx_sz -1);
 	tx_thread->tx_ring[idx] = (tx_thread->tx_ring[idx] & (~0x1));
+	++tx_thread->tx_counter;
+}
+
+//Zero out Entry and advance counter.
+//In case of refill packet dont allow user to try and reclaim packet
+//TODO: Add this to NAPI handler as well
+static inline void advance_tx_ring_refill(struct maio_tx_thread *tx_thread)
+{
+	u16 idx = tx_thread->tx_counter & (tx_thread->tx_sz -1);
+	tx_thread->tx_ring[idx] = 0;
 	++tx_thread->tx_counter;
 }
 
@@ -1006,7 +1017,7 @@ static void maio_zc_tx_callback(struct ubuf_info *ubuf, bool zc_success)
 	md->in_transit = in_transit;
 	++md->in_transit_dbg;
 	trace_printk("%s: TX in_transit %s [%d]<%d>\n", __FUNCTION__,
-			in_transit ? "YES": "NO", refcount_read(&ubuf->refcnt), dbg);
+			in_transit ? "YES": "NO", refcount_read(&ubuf->refcnt), md->in_transit_dbg);
 }
 //skb_zcopy_clear
 static inline void maio_set_comp_handler(struct sk_buff *skb, struct io_md *md)
@@ -1043,11 +1054,11 @@ int maio_post_tx_page(void *state)
 		void 		*kaddr	= uaddr2addr(uaddr);
 		struct page     *page	= virt_to_page(kaddr);
 
-		advance_tx_ring(tx_thread);
 
 		if (unlikely(IS_ERR_OR_NULL(kaddr))) {
 			trace_printk("Invalid kaddr %llx from user %llx\n", (u64)kaddr, (u64)uaddr);
 			pr_err("Invalid kaddr %llx from user %llx\n", (u64)kaddr, (u64)uaddr);
+			advance_tx_ring(tx_thread);
 			continue;
 		}
 
@@ -1055,7 +1066,7 @@ int maio_post_tx_page(void *state)
 			/* This check only makes sense if pages are zeroed out (?) */
 			if (unlikely(get_page_state(page))) {
 				md = virt2io_md(kaddr);
-				pr_err("TX] Zero refcount page %llx(state %llx [%u]<%llx>[%u] )[%d] addr %llx -- PANIC\n"
+				pr_err("TX] Zero refcount page %llx(state %llx [%u]<%llx>[%u] )[%d] addr %llx"
 					"TX] transit %d transitcnt %u [%d/%d]\n",
 					(u64)page, get_page_state(page), md->line,
 					md->prev_state, md->prev_line, page_ref_count(page), (u64)kaddr,
@@ -1118,6 +1129,7 @@ int maio_post_tx_page(void *state)
 				get_maio_uaddr(page));
 
 			panic("This should not happen\n");
+			advance_tx_ring(tx_thread);
 			continue;
 		}
 
@@ -1138,6 +1150,7 @@ int maio_post_tx_page(void *state)
 
 			local_lwm = false;
 
+			advance_tx_ring_refill(tx_thread);
 			continue;
 		}
 		set_page_state(page, MAIO_PAGE_TX);
@@ -1153,13 +1166,16 @@ int maio_post_tx_page(void *state)
 
 		if (unlikely(((uaddr & (~PAGE_MASK)) + len) > PAGE_SIZE)) {
 			pr_err("Buffer to Long [%llx] len %u klen = %u\n", uaddr, md->len, len);
+			advance_tx_ring(tx_thread);
 			continue;
 		}
 
 		skb = maio_build_linear_tx_skb(tx_thread->netdev, kaddr, md->len);
 		if (unlikely(!skb)) {
 			pr_err("%s) Failed to alloc skb\n", __FUNCTION__);
-			put_page(page);
+			//put_page(page);
+			//TODO: This is a memory leak -- add completion handing here.
+			advance_tx_ring(tx_thread);
 			continue;
 		}
 
@@ -1169,6 +1185,7 @@ int maio_post_tx_page(void *state)
 		skb_batch[cnt++] = skb;
 		maio_set_comp_handler(skb, md);
 
+		advance_tx_ring(tx_thread);
 		if (unlikely(cnt >= TX_BATCH_SIZE))
 			break;
 	}
