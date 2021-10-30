@@ -447,7 +447,7 @@ u16 maio_get_page_stride(struct page *page)
 }
 EXPORT_SYMBOL(maio_get_page_stride);
 
-
+/* unlike maio_alloc_page this function doesnt fallback on page allocator */
 struct page *__maio_alloc_pages(size_t order)
 {
 	void *buffer;
@@ -460,7 +460,7 @@ struct page *__maio_alloc_pages(size_t order)
 		return NULL;
 
 	init_page_count(page);
-	assert(get_page_state(page) == MAIO_PAGE_FREE);
+	assert(get_page_state(page) & (MAIO_PAGE_FREE|MAIO_PAGE_REFILL));
 	set_page_state(page, MAIO_PAGE_RX);
 
 	return page;
@@ -487,19 +487,25 @@ struct page *maio_alloc_pages(size_t order)
 	assert(buffer != NULL);//should not happen
 	page =  (buffer) ? virt_to_page(buffer) : ERR_PTR(-ENOMEM);
 	if (likely( ! IS_ERR_OR_NULL(page))) {
-		if (unlikely((page_ref_count(page) != 0))) {
-			trace_printk("%d:%s:%llx :%s\n", smp_processor_id(), __FUNCTION__, (u64)page, PageHead(page)?"HEAD":"");
-			trace_printk("%d:%s:%llx[%d]%llx\n", smp_processor_id(),
-					__FUNCTION__, (u64)page, page_ref_count(page), (u64)page_address(page));
-			panic("P %llx: %llx  has %d refcnt\n", (u64)page, (u64)page_address(page), page_ref_count(page));
+		assert(is_maio_page(page));
+
+		if (unlikely(get_page_state(page) != MAIO_PAGE_FREE)) {
+			if (unlikely(get_page_state(page) != MAIO_PAGE_REFILL)) {
+				pr_err("ERROR: Page %llx state %llx uaddr %llx\n", (u64)page, get_page_state(page), get_maio_uaddr(page));
+				pr_err("%d:%s:%llx :%s\n", smp_processor_id(), __FUNCTION__, (u64)page, PageHead(page)?"HEAD":"");
+				panic("P %llx: %llx  has %d refcnt\n", (u64)page, (u64)page_address(page), page_ref_count(page));
+			}
+		} else {
+			assert(get_page_state(page) == MAIO_PAGE_FREE);
+
+			if (unlikely((page_ref_count(page) != 0))) {
+				trace_printk("%d:%s:%llx :%s\n", smp_processor_id(), __FUNCTION__, (u64)page, PageHead(page)?"HEAD":"");
+				trace_printk("%d:%s:%llx[%d]%llx\n", smp_processor_id(),
+						__FUNCTION__, (u64)page, page_ref_count(page), (u64)page_address(page));
+				panic("P %llx: %llx  has %d refcnt\n", (u64)page, (u64)page_address(page), page_ref_count(page));
+			}
 		}
 		init_page_count(page);
-		assert(is_maio_page(page));
-		if (unlikely(get_page_state(page) != MAIO_PAGE_FREE)) {
-			pr_err("ERROR: Page %llx state %llx uaddr %llx\n", (u64)page, get_page_state(page), get_maio_uaddr(page));
-			pr_err("%d:%s:%llx :%s\n", smp_processor_id(), __FUNCTION__, (u64)page, PageHead(page)?"HEAD":"");
-		}
-		assert(get_page_state(page) == MAIO_PAGE_FREE);
 		set_page_state(page, MAIO_PAGE_RX);
 	}
 	//trace_debug("%d:%s: %pS\n", smp_processor_id(), __FUNCTION__, __builtin_return_address(0));
@@ -696,6 +702,43 @@ static inline int filter_packet(void *addr)
 #define clear_rx_ring_entry(qp)	(qp)->rx_ring[(qp)->rx_counter & ((qp)->rx_sz -1)] = 0
 #define post_rx_ring(qp, val)	(qp)->rx_ring[(qp)->rx_counter++ & ((qp)->rx_sz -1)] = val
 
+static inline void collect_rx_refill_page(u64 addr)
+{
+	void *kaddr = uaddr2addr(addr & PAGE_MASK);
+	struct page *page = page_address(kaddr);
+	struct io_md *md = virt2io_md(kaddr);
+
+	if (!((u64)kaddr & MAIO_MASK_MAX)) {
+		trace_printk("Huge Page, leak [%llx/%llx]\n", (u64)page, (u64)kaddr);
+		md->state = MAIO_POISON;
+		md->line = __LINE__;
+	} else {
+		md->state = MAIO_PAGE_REFILL;
+		md->line = __LINE__;
+		maio_free_elem(kaddr, 0);
+	}
+/*
+* In the context of hyperv callbacks, accessing struct page(even speculatively) results in this PANIC:
+* 		general protection fault: 0000 [#1] SMP PTI
+*
+*	if (PageHead(page)) {
+*		//trace_debug("[%ld]Caching %llx [%llx]  - P %llx[%d]\n", len, (u64 )kbase, meta->bufs[len],
+*		//	(u64)page, page_ref_count(page));
+*		//maio_cache_head(page);
+*		//set_maio_is_io(page);
+*		set_page_state(page, MAIO_POISON); // Need to add on NEW USER pages.
+*		assert(!is_maio_page(page));
+*	} else {
+*		//TODO: handle head page.
+*		assert(is_maio_page(page));
+*		assert(get_maio_elem_order(__compound_head(page, 0)) == 0);
+*		set_page_count(page, 0);
+*		set_page_state(page, MAIO_PAGE_FREE);
+*		maio_free_elem(kaddr, 0);
+*	}
+*/
+}
+
 //TODO: Add support for vlan detection __vlan_hwaccel
 static inline int __maio_post_rx_page(struct net_device *netdev, struct page *page,
 					void *addr, u32 len, u16 vlan_tci, u16 flags)
@@ -725,32 +768,8 @@ send_the_page:
 	ring_entry = rx_ring_enrty(qp);
 
 	if (likely(ring_entry & 0x1)) {
-		void *kaddr = uaddr2addr(ring_entry & PAGE_MASK);
-		struct page *page = page_address(kaddr);
-
-		if (PageHead(page)) {
-			//trace_debug("[%ld]Caching %llx [%llx]  - P %llx[%d]\n", len, (u64 )kbase, meta->bufs[len],
-			//	(u64)page, page_ref_count(page));
-			//maio_cache_head(page);
-			//set_maio_is_io(page);
-			set_page_state(page, MAIO_POISON); // Need to add on NEW USER pages.
-			assert(!is_maio_page(page));
-		} else {
-			//TODO: handle head page.
-			assert(is_maio_page(page));
-			assert(get_maio_elem_order(__compound_head(page, 0)) == 0);
-			set_page_count(page, 0);
-			set_page_state(page, MAIO_PAGE_FREE);
-			maio_free_elem(kaddr, 0);
-		}
+		collect_rx_refill_page(ring_entry);
 		clear_rx_ring_entry(qp);
-
-		md = virt2io_md(addr);
-		trace_printk("TX] Zero refcount page %llx(state %llx [%u]<%llx>[%u] )[%d] addr %llx -- REFILL\n"
-				"TX] transit %d transitcnt %u [%d/%d]\n",
-				(u64)page, get_page_state(page), md->line,
-				md->prev_state, md->prev_line, page_ref_count(page), (u64)kaddr,
-				md->in_transit, md->in_transit_dbg, md->tx_cnt, md->tx_compl);
 	}
 
 	ring_entry = rx_ring_enrty(qp);
