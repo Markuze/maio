@@ -727,7 +727,6 @@ send_the_page:
 	if (likely(ring_entry & 0x1)) {
 		void *kaddr = uaddr2addr(ring_entry & PAGE_MASK);
 		struct page *page = page_address(kaddr);
-		static unsigned long verbose;
 
 		if (PageHead(page)) {
 			//trace_debug("[%ld]Caching %llx [%llx]  - P %llx[%d]\n", len, (u64 )kbase, meta->bufs[len],
@@ -752,8 +751,6 @@ send_the_page:
 				(u64)page, get_page_state(page), md->line,
 				md->prev_state, md->prev_line, page_ref_count(page), (u64)kaddr,
 				md->in_transit, md->in_transit_dbg, md->tx_cnt, md->tx_compl);
-		if (!(verbose++ & 0xf))
-			trace_printk("at RX refill...[%lu]", verbose);
 	}
 
 	ring_entry = rx_ring_enrty(qp);
@@ -844,7 +841,7 @@ send_the_page:
 	show_io(addr, "RX");
 #if 1
 	post_rx_ring(qp, addr2uaddr(addr));
-	trace_printk("%d:RX %s:%llx[%u]%llx{%d}\n", smp_processor_id(),
+	trace_debug("%d:RX %s:%llx[%u]%llx{%d}\n", smp_processor_id(),
 			page ? "COPY" : "ZC",
 			(u64)addr, len,
 			addr2uaddr(addr), page_ref_count(page));
@@ -1016,7 +1013,7 @@ static void maio_zc_tx_callback(struct ubuf_info *ubuf, bool zc_success)
 
 	md->in_transit = in_transit;
 	++md->in_transit_dbg;
-	trace_printk("%s: TX in_transit %s [%d]<%d>\n", __FUNCTION__,
+	trace_debug("%s: TX in_transit %s [%d]<%d>\n", __FUNCTION__,
 			in_transit ? "YES": "NO", refcount_read(&ubuf->refcnt), md->in_transit_dbg);
 }
 //skb_zcopy_clear
@@ -1135,7 +1132,7 @@ int maio_post_tx_page(void *state)
 
 		/* A refill page from user following an lwm crosss */
 		if (unlikely(!md->len)) {
-			trace_printk("TX] Zero refcount page %llx(state %llx [%u]<%llx>[%u] )[%d] addr %llx -- PANIC\n"
+			trace_debug("TX] Zero refcount page %llx(state %llx [%u]<%llx>[%u] )[%d] addr %llx -- PANIC\n"
 					"TX] transit %d transitcnt %u [%d/%d]\n",
 					(u64)page, get_page_state(page), md->line,
 					md->prev_state, md->prev_line, page_ref_count(page), (u64)kaddr,
@@ -1160,7 +1157,7 @@ int maio_post_tx_page(void *state)
 		len 	= md->len + SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
 
 		show_io(kaddr, "TX");
-		trace_printk("TX %llx/%llx [%d]from user %llx [#%d]\n",
+		trace_debug("TX %llx/%llx [%d]from user %llx [#%d]\n",
 				(u64)kaddr, (u64)page, page_ref_count(page),
 				(u64)uaddr, cnt);
 
