@@ -168,9 +168,22 @@ static inline struct io_md* page2io_md(struct page *page)
 */
 }
 
+static inline void dec_state(u64 state)
+{
+}
+
+
+static inline void dec_state(u64 state)
+{
+}
+
 static inline void __set_page_state(struct page *page, u64 new_state, u32 line)
 {
 	struct io_md *md = page2io_md(page);
+
+	dec_state(md->state);
+	inc_state(new_state);
+
 	md->prev_state = md->state;
 	md->prev_line  = md->line;
 	md->state = new_state;
@@ -492,6 +505,7 @@ struct page *__maio_alloc_pages(size_t order)
 	assert(buffer != NULL);//should not happen
 	page =  (buffer) ? virt_to_page(buffer) : ERR_PTR(-ENOMEM);
 	if (likely( ! IS_ERR_OR_NULL(page))) {
+		//PANIC HERE?!!?!? -- lwm crossed
 		assert(is_maio_page(page));
 
 		if (unlikely(get_page_state(page) != MAIO_PAGE_FREE)) {
@@ -1043,6 +1057,7 @@ static void maio_zc_tx_callback(struct ubuf_info *ubuf, bool zc_success)
 	int in_transit = 1;
 
 	if (refcount_dec_and_test(&ubuf->refcnt)) {
+		set_page_state(page, MAIO_PAGE_USER);
 		in_transit = 0;
 	}
 
@@ -1211,6 +1226,7 @@ int maio_post_tx_page(void *state)
 		void 		*kaddr	= uaddr2addr(uaddr);
 		struct page     *page	= virt_to_page(kaddr);
 
+		//PANIC: Handle is_maio_page
 		if ((md = common_egress_handling(kaddr, page, uaddr)) == NULL) {
 			advance_tx_ring(tx_thread);
 			continue;

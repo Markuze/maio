@@ -21,14 +21,19 @@
 /*************************************************/
 
 struct memory_stats {
-	u64	page_user;
-	u64	page_rx;
-	u64	page_tx;
-	u64	page_napi;
-	u64	page_free;
-	u64	page_refill;
-	u64	page_head;
-	u64	nr_page_initial;
+	union {
+		struct {
+			atomic64_t	page_user;
+			atomic64_t	page_rx;
+			atomic64_t	page_tx;
+			atomic64_t	page_napi;
+			atomic64_t	page_free;
+			atomic64_t	page_refill;
+			atomic64_t	page_head;
+			atomic64_t	nr_page_initial;
+		};
+		atomic64_t	array[8];
+	};
 };
 
 struct io_md {
