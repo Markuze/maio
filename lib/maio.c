@@ -184,6 +184,23 @@ static inline u64 get_page_state(struct page *page)
 	return md->state;
 }
 
+static inline void	dump_page_state(struct page *page)
+{
+	struct io_md *md = page2io_md(page);
+
+	pr_err("ERROR: Page %llx state %llx uaddr %llx\n", (u64)page, get_page_state(page), get_maio_uaddr(page));
+	pr_err("%d:%s:%llx :%s\n", smp_processor_id(), __FUNCTION__, (u64)page, PageHead(page)?"HEAD":"");
+	pr_err("%ps] Non Zero refcount page %llx(state %llx [%u]<%llx>[%u] )[%d] addr %llx\n"
+		"%ps] transit %d transitcnt %u [%d/%d]\n",
+		__builtin_return_address(0),
+		(u64)page, get_page_state(page), md->line,
+		md->prev_state, md->prev_line, page_ref_count(page), (u64)page_address(page),
+		__builtin_return_address(0),
+		md->in_transit, md->in_transit_dbg, md->tx_cnt, md->tx_compl);
+}
+
+
+
 static inline void flush_all_mtts(void)
 {
 	struct rb_node *node = mtt_tree.rb_node;
@@ -469,6 +486,7 @@ struct page *__maio_alloc_pages(size_t order)
 		buffer = mag_alloc_elem(&global_maio.mag[order2idx(order)]);
 		*/
 		pr_err("Failed to alloc from MAIO mag [%ps]\n", __builtin_return_address(0));
+		panic("WTF?!?!");
 		return NULL;
 	}
 	assert(buffer != NULL);//should not happen
@@ -478,8 +496,7 @@ struct page *__maio_alloc_pages(size_t order)
 
 		if (unlikely(get_page_state(page) != MAIO_PAGE_FREE)) {
 			if (unlikely(get_page_state(page) != MAIO_PAGE_REFILL)) {
-				pr_err("ERROR: Page %llx state %llx uaddr %llx\n", (u64)page, get_page_state(page), get_maio_uaddr(page));
-				pr_err("%d:%s:%llx :%s\n", smp_processor_id(), __FUNCTION__, (u64)page, PageHead(page)?"HEAD":"");
+				dump_page_state(page);
 				panic("P %llx: %llx  has %d refcnt\n", (u64)page, (u64)page_address(page), page_ref_count(page));
 			}
 		} else {
@@ -704,9 +721,9 @@ static inline int filter_packet(void *addr)
 static inline void collect_rx_refill_page(u64 addr)
 {
 	void *kaddr = uaddr2addr(addr & PAGE_MASK);
-	struct page *page = page_address(kaddr);
-	struct io_md *md = virt2io_md(kaddr);
+	struct page *page = virt_to_page(kaddr);
 
+#if 0
 	if (!((u64)kaddr & MAIO_MASK_MAX)) {
 		trace_printk("Huge Page, leak [%llx/%llx]\n", (u64)page, (u64)kaddr);
 		md->state = MAIO_POISON;
@@ -716,26 +733,30 @@ static inline void collect_rx_refill_page(u64 addr)
 		md->line = __LINE__;
 		maio_free_elem(kaddr, 0);
 	}
-/*
-* In the context of hyperv callbacks, accessing struct page(even speculatively) results in this PANIC:
-* 		general protection fault: 0000 [#1] SMP PTI
-*
-*	if (PageHead(page)) {
-*		//trace_debug("[%ld]Caching %llx [%llx]  - P %llx[%d]\n", len, (u64 )kbase, meta->bufs[len],
-*		//	(u64)page, page_ref_count(page));
-*		//maio_cache_head(page);
-*		//set_maio_is_io(page);
-*		set_page_state(page, MAIO_POISON); // Need to add on NEW USER pages.
-*		assert(!is_maio_page(page));
-*	} else {
-*		//TODO: handle head page.
-*		assert(is_maio_page(page));
-*		assert(get_maio_elem_order(__compound_head(page, 0)) == 0);
-*		set_page_count(page, 0);
-*		set_page_state(page, MAIO_PAGE_FREE);
-*		maio_free_elem(kaddr, 0);
-*	}
-*/
+#endif
+
+	if (PageHead(page)) {
+		//trace_debug("[%ld]Caching %llx [%llx]  - P %llx[%d]\n", len, (u64 )kbase, meta->bufs[len],
+		//	(u64)page, page_ref_count(page));
+		//maio_cache_head(page);
+		//set_maio_is_io(page);
+		set_page_state(page, MAIO_POISON); // Need to add on NEW USER pages.
+		assert(!is_maio_page(page));
+	} else {
+		//TODO: handle head page.
+		assert(is_maio_page(page));
+		assert(get_maio_elem_order(__compound_head(page, 0)) == 0);
+		if (get_page_state(page)) {
+			if (! (get_page_state(page) == MAIO_PAGE_TX || get_page_state(page) == MAIO_PAGE_USER)) {
+				dump_page_state(page);
+				panic("Illegal state\n");
+			}
+		}
+		set_page_count(page, 0);
+		set_page_state(page, MAIO_PAGE_FREE);
+		maio_free_elem(kaddr, 0);
+	}
+
 }
 
 //TODO: Add support for vlan detection __vlan_hwaccel
@@ -767,8 +788,8 @@ send_the_page:
 	ring_entry = rx_ring_enrty(qp);
 
 	if (likely(ring_entry & 0x1)) {
-		collect_rx_refill_page(ring_entry);
 		clear_rx_ring_entry(qp);
+		collect_rx_refill_page(ring_entry);
 	}
 
 	ring_entry = rx_ring_enrty(qp);
@@ -822,9 +843,6 @@ send_the_page:
 		if (unlikely(!page)) {
 			return 0;
 		}
-
-		/* For the assert */
-		set_page_state(page, MAIO_PAGE_RX);
 
 		buff = page_address(page);
 
@@ -1201,7 +1219,7 @@ int maio_post_tx_page(void *state)
 		/* A refill page from user following an lwm crosss */
 		if (unlikely(!md->len)) {
 			collect_lwm_page(page, kaddr);
-			*local_lwm = false;
+			local_lwm = false;
 			advance_tx_ring_refill(tx_thread);
 			continue;
 		}
@@ -1456,7 +1474,7 @@ static int maio_post_napi_page(struct maio_tx_thread *tx_thread/*, struct napi_s
 		/* A refill page from user following an lwm crosss */
 		if (unlikely(!md->len)) {
 			collect_lwm_page(page, kaddr);
-			*local_lwm = false;
+			local_lwm = false;
 			advance_tx_ring_refill(tx_thread);
 			continue;
 		}
