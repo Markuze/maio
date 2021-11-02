@@ -41,18 +41,6 @@ typedef bool (*maio_filter_func_p)(void *);
 extern maio_filter_func_p maio_filter;
 extern struct user_matrix *global_maio_matrix[MAX_DEV_NUM];
 
-/******** MAIO PAGE STATE FLAGS ****************/
-#define MAIO_PAGE_REFILL	0x4000
-#define MAIO_PAGE_HEAD 		0x2000
-#define MAIO_PAGE_FREE		0x1000
-#define MAIO_PAGE_IO   		(MAIO_PAGE_TX|MAIO_PAGE_RX|MAIO_PAGE_NAPI)   // TX|RX|NAPI
-#define MAIO_PAGE_NAPI		0x800   // storred in the magz
-#define MAIO_PAGE_TX   		0x400   // sent by user
-#define MAIO_PAGE_RX   		0x200   // alloced from magz - usualy RX
-#define MAIO_PAGE_USER 		0x100   // page in user space control
-/*************************************************/
-
-
 /* Current mem layout
 	4K [64|128 |640   |512      |2KB  |256B 	    |320B       |128B		   ]
 	   [ dpdk  |vc_pkt| headroom| data| hole <shadow md>| skb_shinfo| io_md + ubuf_info]
