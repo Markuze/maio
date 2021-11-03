@@ -151,6 +151,23 @@ static void dump_memory_stats(struct seq_file *m)
 		}
 }
 
+static inline void dec_state(u64 state)
+{
+	if (likely(state)) {
+		u8 idx  = ffs(state >> 9);
+		atomic_long_dec(&memory_stats.array[idx]);
+	}
+}
+
+
+static inline void inc_state(u64 state)
+{
+	if (likely(state)) {
+		u8 idx = ffs(state >> 9);
+		atomic_long_inc(&memory_stats.array[idx]);
+	}
+}
+
 static inline bool maio_lwm_crossed(void)
 {
 	/* We should not spam the user with lwm triggers */
@@ -158,6 +175,7 @@ static inline bool maio_lwm_crossed(void)
 		return false;
 
 	if (mag_get_full_count(&global_maio.mag[0]) < maio_mag_lwm) {
+		inc_state(MAIO_LWM_TRIGGER);
 		lwm_triggered = true;
 	}
 	return lwm_triggered;
@@ -193,23 +211,6 @@ static inline struct io_md* page2io_md(struct page *page)
 	assert(idx <= 512);
 	return &track->map[idx];
 */
-}
-
-static inline void dec_state(u64 state)
-{
-	if (likely(state)) {
-		u8 idx  = ffs(state >> 9);
-		atomic_long_dec(&memory_stats.array[idx]);
-	}
-}
-
-
-static inline void inc_state(u64 state)
-{
-	if (likely(state)) {
-		u8 idx = ffs(state >> 9);
-		atomic_long_inc(&memory_stats.array[idx]);
-	}
 }
 
 static inline void __set_page_state(struct io_md *md,u64 new_state, u32 line)
@@ -788,17 +789,15 @@ static inline void collect_rx_refill_page(u64 addr)
 		//	(u64)page, page_ref_count(page));
 		//maio_cache_head(page);
 		//set_maio_is_io(page);
-		set_page_state(page, MAIO_POISON); // Need to add on NEW USER pages.
+		set_page_state(page, MAIO_PAGE_HEAD); // Need to add on NEW USER pages.
 		assert(!is_maio_page(page));
 	} else {
 		//TODO: handle head page.
 		assert(is_maio_page(page));
 		assert(get_maio_elem_order(__compound_head(page, 0)) == 0);
-		if (get_page_state(page)) {
-			if (get_page_state(page) != MAIO_PAGE_USER) {
-				dump_page_state(page);
-				panic("Illegal state\n");
-			}
+		if (get_page_state(page) != MAIO_PAGE_REFILL) {
+			dump_page_state(page);
+			panic("Illegal state\n");
 		}
 		set_page_count(page, 0);
 		set_page_state(page, MAIO_PAGE_FREE);
@@ -864,6 +863,7 @@ send_the_page:
 	/* HWM crossed return some mem to user */
 	if (unlikely(maio_hwm_crossed() && !refill)) {
 		void *buff;
+		inc_state(MAIO_HWM_TRIGGER);
 		trace_printk("HWM crossed [%d], sending page to user\n", mag_get_full_count(&global_maio.mag[0]));
 		//if hwm was crossed
 		refill = __maio_alloc_page();
@@ -1137,6 +1137,7 @@ static inline void collect_lwm_page(struct page *page, void *kaddr)
 	//set_page_state(page, MAIO_PAGE_RX);
 	//put_page(page); /*TODO:  Is this Valid?*/
 
+	inc_state(MAIO_LWM_PAGE);
 	set_page_count(page, 0);
 	set_page_state(page, MAIO_PAGE_FREE);
 	maio_free_elem(kaddr, 0);
@@ -1178,7 +1179,7 @@ static inline void *common_egress_handling(void *kaddr, struct page *page, u64 u
 			void *buff;
 
 			//set_maio_is_io(page);
-			set_page_state(page, MAIO_POISON); // Need to add on NEW USER pages.
+			set_page_state(page, MAIO_PAGE_HEAD); // Need to add on NEW USER pages.
 
 			/* Head Pages cant be used for refill */
 			if (!md->len)
@@ -1725,7 +1726,7 @@ static inline ssize_t maio_add_pages_0(struct file *file, const char __user *buf
 			//	(u64)page, page_ref_count(page));
 			//maio_cache_head(page);
 			//set_maio_is_io(page);
-			set_page_state(page, MAIO_POISON); // Need to add on NEW USER pages.
+			set_page_state(page, MAIO_PAGE_HEAD); // Need to add on NEW USER pages.
 			assert(!is_maio_page(page));
 			//memset(page_address(page), 0, PAGE_SIZE);
 		} else {
