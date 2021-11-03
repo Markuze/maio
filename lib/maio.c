@@ -792,13 +792,17 @@ static inline void collect_rx_refill_page(u64 addr)
 		set_page_state(page, MAIO_PAGE_HEAD); // Need to add on NEW USER pages.
 		assert(!is_maio_page(page));
 	} else {
-		//TODO: handle head page.
+		struct io_md *md = virt2io_md(kaddr);
+
 		assert(is_maio_page(page));
 		assert(get_maio_elem_order(__compound_head(page, 0)) == 0);
 		if (get_page_state(page) != MAIO_PAGE_REFILL) {
 			dump_page_state(page);
 			panic("Illegal state\n");
 		}
+		/* page refill is set by user */
+		md->state = MAIO_PAGE_USER;
+		inc_state(MAIO_PAGE_REFILL);
 		set_page_count(page, 0);
 		set_page_state(page, MAIO_PAGE_FREE);
 		maio_free_elem(kaddr, 0);
