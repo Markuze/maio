@@ -536,7 +536,6 @@ struct page *__maio_alloc_pages(size_t order)
 	assert(buffer != NULL);//should not happen
 	page =  (buffer) ? virt_to_page(buffer) : ERR_PTR(-ENOMEM);
 	if (likely( ! IS_ERR_OR_NULL(page))) {
-		//PANIC HERE?!!?!? -- lwm crossed
 		assert(is_maio_page(page));
 
 		if (unlikely(get_page_state(page) != MAIO_PAGE_FREE)) {
@@ -1165,6 +1164,8 @@ static inline void *common_egress_handling(void *kaddr, struct page *page, u64 u
 		init_page_count(page);
 	}
 
+	md = virt2io_md(kaddr);
+
 	if (unlikely(!is_maio_page(page))) {
 
 		if (PageHead(page)) {
@@ -1172,6 +1173,10 @@ static inline void *common_egress_handling(void *kaddr, struct page *page, u64 u
 
 			//set_maio_is_io(page);
 			set_page_state(page, MAIO_POISON); // Need to add on NEW USER pages.
+
+			/* Head Pages cant be used for refill */
+			if (!md->len)
+				return NULL;
 
 			page = __maio_alloc_page();
 			if (!page)
@@ -1200,8 +1205,6 @@ static inline void *common_egress_handling(void *kaddr, struct page *page, u64 u
 			panic("This shit cant happen!\n"); //uaddr2addr would fail first
 		}
 	}
-
-	md = virt2io_md(kaddr);
 #if 0
 	//no longer a valid check with user zc retrasmit support
 	if (unlikely(md->state > MAIO_PAGE_USER)) {
