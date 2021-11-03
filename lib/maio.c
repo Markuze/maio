@@ -62,7 +62,6 @@ static unsigned last_dev_idx;
 static u16 maio_headroom	= (0x800 -512 -192); 	//This should make a zero gap between vc_pckt and headroom + data
 
 static struct kmem_cache *ubuf_cache;
-static struct memory_stats memory_stats;
 
 /* HP Cache */
 static LIST_HEAD(hp_cache);
@@ -125,6 +124,18 @@ static inline void __dump_io_md(struct io_md *md, const char *txt)
 		txt, md->state, md->len, md->poison, md->vlan_tci, md->flags);
 }
 
+static void dump_memory_stats(struct seq_file *m)
+{
+	int i = 0;
+	for (i = 0; i < NR_MAIO_STATS; i++)
+		if (m)
+			seq_printf(m, "%s\t: %lx\n", maio_stat_names[i],
+					atomic_long_read(&memory_stats.array[i]));
+		else
+			pr_err("%s\t: %lx\n", maio_stat_names[i],
+					atomic_long_read(&memory_stats.array[i]));
+}
+
 static inline bool maio_lwm_crossed(void)
 {
 	/* We should not spam the user with lwm triggers */
@@ -172,7 +183,7 @@ static inline struct io_md* page2io_md(struct page *page)
 static inline void dec_state(u64 state)
 {
 	if (likely(state)) {
-		u8 idx  = ffs(state >> 8);
+		u8 idx  = ffs(state >> 9);
 		atomic_long_dec(&memory_stats.array[idx]);
 	}
 }
@@ -181,7 +192,7 @@ static inline void dec_state(u64 state)
 static inline void inc_state(u64 state)
 {
 	if (likely(state)) {
-		u8 idx = ffs(state >> 8);
+		u8 idx = ffs(state >> 9);
 		atomic_long_inc(&memory_stats.array[idx]);
 	}
 }
@@ -217,6 +228,8 @@ static inline void	dump_page_state(struct page *page)
 		md->prev_state, md->prev_line, page_ref_count(page), (u64)page_address(page),
 		__builtin_return_address(0),
 		md->in_transit, md->in_transit_dbg, md->tx_cnt, md->tx_compl);
+
+	dump_memory_stats(NULL);
 }
 
 
@@ -1700,6 +1713,7 @@ static inline ssize_t maio_add_pages_0(struct file *file, const char __user *buf
 			//		(u64)page, page_ref_count(page));
 			set_page_count(page, 0);
 			set_page_state(page, MAIO_PAGE_FREE);
+			inc_state(MAIO_PAGE_NEW);
 			assert(get_maio_elem_order(__compound_head(page, 0)) == 0);
 			assert(is_maio_page(page));
 			maio_free_elem(kbase, 0);
@@ -1710,6 +1724,7 @@ static inline ssize_t maio_add_pages_0(struct file *file, const char __user *buf
 	maio_mag_hwm += (maio_mag_hwm >> 3); //+12% of initial
 
 	pr_err("%s} HWM %ld LWM %ld lwm trigger %s\n", __FUNCTION__, maio_mag_hwm, maio_mag_lwm, lwm_triggered ? "OFF": "ON");
+	dump_memory_stats(NULL);
 	return 0;
 }
 
@@ -1918,14 +1933,6 @@ static int maio_enable_show(struct seq_file *m, void *v)
 {
 	seq_printf(m, "%d\n", maio_configured(last_dev_idx) ? 1 : 0);
         return 0;
-}
-
-static void dump_memory_stats(struct seq_file *m)
-{
-	int i = 0;
-	for (i = 0; i < NR_MAIO_STATS; i++)
-		seq_printf(m, "%s\t: %lx\n", maio_stat_names[i],
-				atomic_long_read(&memory_stats.array[i]));
 }
 
 static int maio_map_show(struct seq_file *m, void *v)

@@ -10,6 +10,11 @@
 /********* Caution: Should be same as user counterpart ************************/
 
 /******** MAIO PAGE STATE FLAGS ****************/
+#define MAIO_HWM_PAGE		0x80000
+#define MAIO_HWM_TRIGGER	0x40000
+#define MAIO_LWM_PAGE		0x20000
+#define MAIO_LWM_TRIGGER	0x10000
+#define MAIO_PAGE_NEW		0x8000
 #define MAIO_PAGE_REFILL	0x4000
 #define MAIO_PAGE_HEAD 		0x2000
 #define MAIO_PAGE_FREE		0x1000
@@ -29,7 +34,6 @@ static char* maio_stat_names[] = {
 	"HEAD Page",
 	"Refill Page",
 	"Pushed Pages",
-//-----
 	"LWM Crossed",
 	"LWM Pages",
 	"HWM Crossed",
@@ -49,6 +53,10 @@ struct memory_stats {
 			maio_cntr	page_head;
 			maio_cntr	page_refill;
 			maio_cntr	nr_page_initial;
+			maio_cntr	lwm_crossed;
+			maio_cntr	lwm_pages;
+			maio_cntr	hwm_crossed;
+			maio_cntr	hwm_pages;
 		};
 		maio_cntr	array[0];
 	};
