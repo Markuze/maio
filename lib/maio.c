@@ -128,20 +128,24 @@ static inline void __dump_io_md(struct io_md *md, const char *txt)
 static void dump_memory_stats(struct seq_file *m)
 {
 	int i = 0;
+
+	if (m)
+		seq_printf(m, " Mags: %d (%d) [%lu-%lu])\n",
+			mag_get_full_count(&global_maio.mag[0]),
+			mag_get_full_count(&global_maio.mag[0]) * MAG_DEPTH,
+			maio_mag_lwm, maio_mag_hwm);
+	else
+		pr_err(" Mags: %d (%d) [%lu-%lu])\n",
+			mag_get_full_count(&global_maio.mag[0]),
+			mag_get_full_count(&global_maio.mag[0]) * MAG_DEPTH,
+			maio_mag_lwm, maio_mag_hwm);
+
+
 	for (i = 0; i < NR_MAIO_STATS; i++)
 		if (m) {
-			seq_printf(m, "%llx %ld (%d [%lu-%lu])\n",
-				get_maio_uaddr(virt_to_head_page(global_maio_matrix[last_dev_idx])),
-				hp_cache_size, mag_get_full_count(&global_maio.mag[0]),
-				maio_mag_lwm, maio_mag_hwm);
-
-			seq_printf(m, "%s\t: %lx\n", maio_stat_names[i],
+			seq_printf(m, "%s\t: %ld\n", maio_stat_names[i],
 					atomic_long_read(&memory_stats.array[i]));
 		} else {
-			pr_err(" Mags: %ld (%d) [%lu-%lu])\n",
-				mag_get_full_count(&global_maio.mag[0]),
-				mag_get_full_count(&global_maio.mag[0]) * MAG_DEPTH,
-				maio_mag_lwm, maio_mag_hwm);
 			pr_err("%s\t: %ld\n", maio_stat_names[i],
 					atomic_long_read(&memory_stats.array[i]));
 		}
@@ -232,7 +236,7 @@ static inline void	dump_page_state(struct page *page)
 
 	pr_err("ERROR: Page %llx state %llx uaddr %llx\n", (u64)page, get_page_state(page), get_maio_uaddr(page));
 	pr_err("%d:%s:%llx :%s\n", smp_processor_id(), __FUNCTION__, (u64)page, PageHead(page)?"HEAD":"");
-	pr_err("%ps] Non Zero refcount page %llx(state %llx [%u]<%llx>[%u] )[%d] addr %llx\n"
+	pr_err("%ps] page %llx(state %llx [%u]<%llx>[%u] )[%d] addr %llx\n"
 		"%ps] transit %d transitcnt %u [%d/%d]\n",
 		__builtin_return_address(0),
 		(u64)page, get_page_state(page), md->line,
@@ -971,8 +975,10 @@ int maio_post_rx_page(struct net_device *netdev, void *addr, u32 len, u16 vlan_t
 		page = NULL;
 
 	if ( ! __maio_post_rx_page(netdev, page, addr, len, vlan_tci, flags)) {
-		if (page)
+		if (page) {
+			set_page_state(page, MAIO_PAGE_NS);
 			put_page(page);
+		}
 		return 0;
 	}
 	return 1;

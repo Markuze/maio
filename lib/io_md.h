@@ -10,15 +10,16 @@
 /********* Caution: Should be same as user counterpart ************************/
 
 /******** MAIO PAGE STATE FLAGS ****************/
-#define MAIO_HWM_PAGE		0x80000
-#define MAIO_HWM_TRIGGER	0x40000
-#define MAIO_LWM_PAGE		0x20000
-#define MAIO_LWM_TRIGGER	0x10000
-#define MAIO_PAGE_NEW		0x8000
-#define MAIO_PAGE_REFILL	0x4000
-#define MAIO_PAGE_HEAD 		0x2000
-#define MAIO_PAGE_FREE		0x1000
+#define MAIO_HWM_PAGE		0x100000
+#define MAIO_HWM_TRIGGER	0x80000
+#define MAIO_LWM_PAGE		0x40000
+#define MAIO_LWM_TRIGGER	0x20000
+#define MAIO_PAGE_NEW		0x10000
+#define MAIO_PAGE_REFILL	0x8000
+#define MAIO_PAGE_HEAD 		0x4000
+#define MAIO_PAGE_FREE		0x2000
 #define MAIO_PAGE_IO   		(MAIO_PAGE_TX|MAIO_PAGE_RX|MAIO_PAGE_NAPI)   // TX|RX|NAPI
+#define MAIO_PAGE_NS		0x1000   // storred in the magz
 #define MAIO_PAGE_NAPI		0x800   // storred in the magz
 #define MAIO_PAGE_TX   		0x400   // sent by user
 #define MAIO_PAGE_RX   		0x200   // alloced from magz - usualy RX
@@ -26,18 +27,19 @@
 /*************************************************/
 
 static char* maio_stat_names[] = {
-	"User page",
-	"RX Page  ",
-	"TX Page  ",
-	"NAPI Page",
-	"Free Page",
-	"HEAD Page",
-	"Refill Page",
-	"Pushed Pages",
-	"LWM Crossed",
-	"LWM Pages",
-	"HWM Crossed",
-	"HWM Pages",
+	"User page	",
+	"RX Page  	",
+	"TX Page  	",
+	"NAPI Page	",
+	"Network Stack	",
+	"Free Page	",
+	"HEAD Page	",
+	"Refill Page	",
+	"Pushed Pages	",
+	"LWM Crossed	",
+	"LWM Pages	",
+	"HWM Crossed	",
+	"HWM Pages	",
 };
 
 typedef atomic64_t maio_cntr;
@@ -49,6 +51,7 @@ struct memory_stats {
 			maio_cntr	page_rx;
 			maio_cntr	page_tx;
 			maio_cntr	page_napi;
+			maio_cntr	page_network_stack;
 			maio_cntr	page_free;
 			maio_cntr	page_head;
 			maio_cntr	page_refill;
