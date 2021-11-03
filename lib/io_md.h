@@ -20,21 +20,41 @@
 #define MAIO_PAGE_USER 		0x100   // page in user space control
 /*************************************************/
 
+static char* maio_stat_names[] = {
+	"User page",
+	"RX Page",
+	"TX Page",
+	"NAPI Page",
+	"Free Page",
+	"HEAD Page",
+	"Refill Page",
+	"Pushed Pages",
+//-----
+	"LWM Crossed",
+	"LWM Pages",
+	"HWM Crossed",
+	"HWM Pages",
+};
+
+typedef atomic64_t maio_cntr;
+
 struct memory_stats {
 	union {
 		struct {
-			atomic64_t	page_user;
-			atomic64_t	page_rx;
-			atomic64_t	page_tx;
-			atomic64_t	page_napi;
-			atomic64_t	page_free;
-			atomic64_t	page_refill;
-			atomic64_t	page_head;
-			atomic64_t	nr_page_initial;
+			maio_cntr	page_user;
+			maio_cntr	page_rx;
+			maio_cntr	page_tx;
+			maio_cntr	page_napi;
+			maio_cntr	page_free;
+			maio_cntr	page_head;
+			maio_cntr	page_refill;
+			maio_cntr	nr_page_initial;
 		};
-		atomic64_t	array[8];
+		maio_cntr	array[0];
 	};
 };
+
+#define NR_MAIO_STATS	(sizeof(struct memory_stats)/sizeof(maio_cntr))
 
 struct io_md {
 	u64 state;

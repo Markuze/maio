@@ -62,6 +62,7 @@ static unsigned last_dev_idx;
 static u16 maio_headroom	= (0x800 -512 -192); 	//This should make a zero gap between vc_pckt and headroom + data
 
 static struct kmem_cache *ubuf_cache;
+static struct memory_stats memory_stats;
 
 /* HP Cache */
 static LIST_HEAD(hp_cache);
@@ -170,17 +171,23 @@ static inline struct io_md* page2io_md(struct page *page)
 
 static inline void dec_state(u64 state)
 {
+	if (likely(state)) {
+		u8 idx  = ffs(state >> 8);
+		atomic_long_dec(&memory_stats.array[idx]);
+	}
 }
 
 
-static inline void dec_state(u64 state)
+static inline void inc_state(u64 state)
 {
+	if (likely(state)) {
+		u8 idx = ffs(state >> 8);
+		atomic_long_inc(&memory_stats.array[idx]);
+	}
 }
 
-static inline void __set_page_state(struct page *page, u64 new_state, u32 line)
+static inline void __set_page_state(struct io_md *md,u64 new_state, u32 line)
 {
-	struct io_md *md = page2io_md(page);
-
 	dec_state(md->state);
 	inc_state(new_state);
 
@@ -189,7 +196,7 @@ static inline void __set_page_state(struct page *page, u64 new_state, u32 line)
 	md->state = new_state;
 	md->line = line;
 }
-#define set_page_state(p,s)	__set_page_state(p,s, __LINE__)
+#define set_page_state(p,s)	__set_page_state(page2io_md(page),s, __LINE__)
 
 static inline u64 get_page_state(struct page *page)
 {
@@ -761,7 +768,7 @@ static inline void collect_rx_refill_page(u64 addr)
 		assert(is_maio_page(page));
 		assert(get_maio_elem_order(__compound_head(page, 0)) == 0);
 		if (get_page_state(page)) {
-			if (! (get_page_state(page) == MAIO_PAGE_TX || get_page_state(page) == MAIO_PAGE_USER)) {
+			if (get_page_state(page) != MAIO_PAGE_USER) {
 				dump_page_state(page);
 				panic("Illegal state\n");
 			}
@@ -1056,8 +1063,9 @@ static void maio_zc_tx_callback(struct ubuf_info *ubuf, bool zc_success)
 	struct io_md *md = ubuf->ctx;
 	int in_transit = 1;
 
+
 	if (refcount_dec_and_test(&ubuf->refcnt)) {
-		set_page_state(page, MAIO_PAGE_USER);
+		__set_page_state(md, MAIO_PAGE_USER, __LINE__);
 		in_transit = 0;
 	}
 
@@ -1912,6 +1920,14 @@ static int maio_enable_show(struct seq_file *m, void *v)
         return 0;
 }
 
+static void dump_memory_stats(struct seq_file *m)
+{
+	int i = 0;
+	for (i = 0; i < NR_MAIO_STATS; i++)
+		seq_printf(m, "%s\t: %lx\n", maio_stat_names[i],
+				atomic_long_read(&memory_stats.array[i]));
+}
+
 static int maio_map_show(struct seq_file *m, void *v)
 {
 	/* TODO: make usefull */
@@ -1920,6 +1936,7 @@ static int maio_map_show(struct seq_file *m, void *v)
 			get_maio_uaddr(virt_to_head_page(global_maio_matrix[last_dev_idx])),
 			hp_cache_size, mag_get_full_count(&global_maio.mag[0]),
 			maio_mag_lwm, maio_mag_hwm);
+		dump_memory_stats(m);
 	} else {
 		seq_printf(m, "NOT CONFIGURED\n");
 	}
@@ -1927,7 +1944,7 @@ static int maio_map_show(struct seq_file *m, void *v)
         return 0;
 }
 
-#define MAIO_VERSION	"v0.96-zc-retarnsmit"
+#define MAIO_VERSION	"v0.98-memory-stats"
 static int maio_version_show(struct seq_file *m, void *v)
 {
 	seq_printf(m, "%s\n", MAIO_VERSION);
