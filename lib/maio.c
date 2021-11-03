@@ -18,10 +18,11 @@
 #define assert(expr) 	do { \
 				if (unlikely(!(expr))) { \
 					trace_printk("Assertion failed! %s, %s, %s, line %d\n", \
-						   #expr, __FILE__, __func__, __LINE__); \
-					pr_alert("Assertion failed! %s, %s, %s, line %d\n", \
-						   #expr, __FILE__, __func__, __LINE__); \
-					panic("ASSERT FAILED: %s (%s)", __FUNCTION__, #expr); \
+						   #expr, __FILE__, __func__, __LINE__); 	\
+					pr_alert("Assertion failed! %s, %s, %s, line %d\n", 	\
+						   #expr, __FILE__, __func__, __LINE__); 	\
+					dump_memory_stats(NULL);				\
+					panic("ASSERT FAILED: %s (%s)", __FUNCTION__, #expr); 	\
 				} \
 			} while (0)
 
@@ -128,12 +129,22 @@ static void dump_memory_stats(struct seq_file *m)
 {
 	int i = 0;
 	for (i = 0; i < NR_MAIO_STATS; i++)
-		if (m)
+		if (m) {
+			seq_printf(m, "%llx %ld (%d [%lu-%lu])\n",
+				get_maio_uaddr(virt_to_head_page(global_maio_matrix[last_dev_idx])),
+				hp_cache_size, mag_get_full_count(&global_maio.mag[0]),
+				maio_mag_lwm, maio_mag_hwm);
+
 			seq_printf(m, "%s\t: %lx\n", maio_stat_names[i],
 					atomic_long_read(&memory_stats.array[i]));
-		else
-			pr_err("%s\t: %lx\n", maio_stat_names[i],
+		} else {
+			pr_err(" Mags: %ld (%d) [%lu-%lu])\n",
+				mag_get_full_count(&global_maio.mag[0]),
+				mag_get_full_count(&global_maio.mag[0]) * MAG_DEPTH,
+				maio_mag_lwm, maio_mag_hwm);
+			pr_err("%s\t: %ld\n", maio_stat_names[i],
 					atomic_long_read(&memory_stats.array[i]));
+		}
 }
 
 static inline bool maio_lwm_crossed(void)
@@ -1939,10 +1950,6 @@ static int maio_map_show(struct seq_file *m, void *v)
 {
 	/* TODO: make usefull */
 	if (global_maio_matrix[last_dev_idx]) {
-		seq_printf(m, "%llx %ld (%d [%lu-%lu])\n",
-			get_maio_uaddr(virt_to_head_page(global_maio_matrix[last_dev_idx])),
-			hp_cache_size, mag_get_full_count(&global_maio.mag[0]),
-			maio_mag_lwm, maio_mag_hwm);
 		dump_memory_stats(m);
 	} else {
 		seq_printf(m, "NOT CONFIGURED\n");

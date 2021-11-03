@@ -27,8 +27,8 @@
 
 static char* maio_stat_names[] = {
 	"User page",
-	"RX Page",
-	"TX Page",
+	"RX Page  ",
+	"TX Page  ",
 	"NAPI Page",
 	"Free Page",
 	"HEAD Page",
