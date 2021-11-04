@@ -839,6 +839,7 @@ send_the_page:
 	ring_entry = rx_ring_enrty(qp);
 
 	if (likely(ring_entry & 0x1)) {
+		//TODO: do the HWM handling for HeadPages
 		clear_rx_ring_entry(qp);
 		collect_rx_refill_page(ring_entry);
 	}
@@ -882,6 +883,7 @@ send_the_page:
 		user should check if address is page aligned, then md is not present
 		this means that this is a refill packet.
 		*/
+		//TODO: Must zero-out MD
 		post_rx_ring(qp, addr2uaddr(buff));
 
 		goto send_the_page;
@@ -1180,6 +1182,9 @@ static inline void *common_egress_handling(void *kaddr, struct page *page, u64 u
 	if (unlikely(!is_maio_page(page))) {
 
 		if (PageHead(page)) {
+			trace_printk("%s with HeadPage\n", __FUNCTION__);
+#if 0
+# Now with zc-callback we dont care about HeadPages on TX.
 			void *buff;
 
 			//set_maio_is_io(page);
@@ -1212,8 +1217,10 @@ static inline void *common_egress_handling(void *kaddr, struct page *page, u64 u
 			set_page_state(page, MAIO_PAGE_USER);
 
 			kaddr = buff;
+#endif
 		} else {
-			panic("This shit cant happen!\n"); //uaddr2addr would fail first
+			pr_err("This shit cant happen!\n"); //uaddr2addr would fail first
+			return NULL;
 		}
 	}
 #if 0
@@ -1272,17 +1279,23 @@ int maio_post_tx_page(void *state)
 		void 		*kaddr	= uaddr2addr(uaddr);
 		struct page     *page	= virt_to_page(kaddr);
 
-		//PANIC: Handle is_maio_page
+		//2) PANIC: Handle is_maio_page -- HeadPage on TX?!
 		if ((md = common_egress_handling(kaddr, page, uaddr)) == NULL) {
 			advance_tx_ring(tx_thread);
 			continue;
 		}
 
+		//1) HeaPage on Refill
 		/* A refill page from user following an lwm crosss */
 		if (unlikely(!md->len)) {
-			collect_lwm_page(page, kaddr);
-			local_lwm = false;
-			advance_tx_ring_refill(tx_thread);
+			if (PageHead(page)) {
+				trace_printk("Ignoring HEadPage on LWM\m");
+				advance_tx_ring(tx_thread);
+			} else {
+				collect_lwm_page(page, kaddr);
+				local_lwm = false;
+				advance_tx_ring_refill(tx_thread);
+			}
 			continue;
 		}
 
@@ -1535,9 +1548,13 @@ static int maio_post_napi_page(struct maio_tx_thread *tx_thread/*, struct napi_s
 
 		/* A refill page from user following an lwm crosss */
 		if (unlikely(!md->len)) {
-			collect_lwm_page(page, kaddr);
-			local_lwm = false;
-			advance_tx_ring_refill(tx_thread);
+			if (PageHead(page)) {
+				advance_tx_ring(tx_thread);
+			} else {
+				collect_lwm_page(page, kaddr);
+				local_lwm = false;
+				advance_tx_ring_refill(tx_thread);
+			}
 			continue;
 		}
 
