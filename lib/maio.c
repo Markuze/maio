@@ -90,12 +90,8 @@ DEFINE_PER_CPU(struct percpu_maio_dev_qp, maio_dev_qp);
 static struct rb_root mtt_tree = RB_ROOT;
 static struct umem_region_mtt *cached_mtt;
 
-static unsigned long maio_mag_lwm  __read_mostly = 128;
-static unsigned long maio_mag_hwm  __read_mostly = ULONG_MAX;
-static bool lwm_triggered;
-
 #ifdef MAIO_ASYNC_TX
-static int maio_post_tx_task(void *state);
+static int maio_post_tx_task(void *);
 static int (*threadfn)(void *data) = maio_post_tx_task;
 #endif
 
@@ -108,11 +104,6 @@ bool maio_configured(int idx)
 	return maio_dev_configured[idx];
 }
 EXPORT_SYMBOL(maio_configured);
-
-static inline bool maio_hwm_crossed(void)
-{
-	return (mag_get_full_count(&global_maio.mag[0]) > maio_mag_hwm);
-}
 
 //#define dump_io_md(...)
 
@@ -128,17 +119,21 @@ static inline void __dump_io_md(struct io_md *md, const char *txt)
 static void dump_memory_stats(struct seq_file *m)
 {
 	int i = 0;
+	long long int delta;
+
+	delta = atomic_long_read(&memory_stats.nr_page_initial) - atomic_long_read(&memory_stats.page_free)
+		-atomic_long_read(&memory_stats.page_rx) -atomic_long_read(&memory_stats.page_network_stack);
 
 	if (m)
-		seq_printf(m, " Mags: %d (%d) [%lu-%lu])\n",
+		seq_printf(m, " Mags: %d (%d) delta %lld)\n",
 			mag_get_full_count(&global_maio.mag[0]),
 			mag_get_full_count(&global_maio.mag[0]) * MAG_DEPTH,
-			maio_mag_lwm, maio_mag_hwm);
+			delta);
 	else
-		pr_err(" Mags: %d (%d) [%lu-%lu])\n",
+		pr_err(" Mags: %d (%d) delta %lld)\n",
 			mag_get_full_count(&global_maio.mag[0]),
 			mag_get_full_count(&global_maio.mag[0]) * MAG_DEPTH,
-			maio_mag_lwm, maio_mag_hwm);
+			delta);
 
 
 	for (i = 0; i < NR_MAIO_STATS; i++)
@@ -149,6 +144,7 @@ static void dump_memory_stats(struct seq_file *m)
 			pr_err("%s\t: %ld\n", maio_stat_names[i],
 					atomic_long_read(&memory_stats.array[i]));
 		}
+
 }
 
 static inline void dec_state(u64 state)
@@ -166,19 +162,6 @@ static inline void inc_state(u64 state)
 		u8 idx = ffs(state >> 9);
 		atomic_long_inc(&memory_stats.array[idx]);
 	}
-}
-
-static inline bool maio_lwm_crossed(void)
-{
-	/* We should not spam the user with lwm triggers */
-	if (lwm_triggered)
-		return false;
-
-	if (mag_get_full_count(&global_maio.mag[0]) < maio_mag_lwm) {
-		inc_state(MAIO_LWM_TRIGGER);
-		lwm_triggered = true;
-	}
-	return lwm_triggered;
 }
 
 static inline struct io_md *kaddr2shadow_md(void *kaddr)
@@ -519,7 +502,6 @@ u16 maio_get_page_stride(struct page *page)
 }
 EXPORT_SYMBOL(maio_get_page_stride);
 
-/* unlike maio_alloc_page this function doesnt fallback on page allocator */
 struct page *__maio_alloc_pages(size_t order)
 {
 	struct page *page;
@@ -531,8 +513,9 @@ struct page *__maio_alloc_pages(size_t order)
 	/* should happen on init when mag is empty.*/
 	if (unlikely(!buffer)) {
 		/*
-		replenish_from_cache(order);
-		buffer = mag_alloc_elem(&global_maio.mag[order2idx(order)]);
+			TODO:
+			replenish_from_user(order);
+			buffer = mag_alloc_elem(&global_maio.mag[order2idx(order)]);
 		*/
 		pr_err("Failed to alloc from MAIO mag [%ps]\n", __builtin_return_address(0));
 		panic("WTF?!?!");
@@ -816,7 +799,6 @@ static inline int __maio_post_rx_page(struct net_device *netdev, struct page *pa
 {
 	u64 qp_idx = get_rx_qp_idx(netdev);
 	u64 ring_entry;
-	struct page *refill = NULL;
 	struct io_md *md;
 	struct percpu_maio_dev_qp *dev_qp = this_cpu_ptr(&maio_dev_qp);
 	struct percpu_maio_qp *qp;
@@ -835,11 +817,10 @@ static inline int __maio_post_rx_page(struct net_device *netdev, struct page *pa
 		return 0;
 	}
 
-send_the_page:
 	ring_entry = rx_ring_enrty(qp);
 
 	if (likely(ring_entry & 0x1)) {
-		//TODO: do the HWM handling for HeadPages
+		//TODO: do the HWM handling for HeadPages -- Just push back
 		clear_rx_ring_entry(qp);
 		collect_rx_refill_page(ring_entry);
 	}
@@ -849,44 +830,6 @@ send_the_page:
 		trace_printk("[%d]User to slow. dropping post of %llx:%llx\n",
 				smp_processor_id(), (u64)addr, addr2uaddr(addr));
 		return 0;
-	}
-
-	/* LWM crossed ask user to return some mem via TX */
-	if (unlikely(maio_lwm_crossed() && !refill)) {
-		trace_printk("LWM crossed [%d], sending request\n", mag_get_full_count(&global_maio.mag[0]));
-		refill = (void *)MAIO_POISON;
-
-		/*
-		user should check if address is MAIO_POISON,
-		this means that this is a request for a refill packet.
-		*/
-		post_rx_ring(qp, MAIO_POISON);
-
-		goto send_the_page;
-	}
-
-	/* HWM crossed return some mem to user */
-	if (unlikely(maio_hwm_crossed() && !refill)) {
-		void *buff;
-		inc_state(MAIO_HWM_TRIGGER);
-		trace_printk("HWM crossed [%d], sending page to user\n", mag_get_full_count(&global_maio.mag[0]));
-		//if hwm was crossed
-		refill = __maio_alloc_page();
-		if (!unlikely(!refill))
-			goto send_the_page;
-		/* For the assert */
-		set_page_state(refill, MAIO_PAGE_USER);
-
-		buff = page_address(refill);
-
-		/*
-		user should check if address is page aligned, then md is not present
-		this means that this is a refill packet.
-		*/
-		//TODO: Must zero-out MD
-		post_rx_ring(qp, addr2uaddr(buff));
-
-		goto send_the_page;
 	}
 
 	trace_debug("kaddr %llx, len %d\n", (u64)addr, len);
@@ -1042,15 +985,6 @@ static inline void advance_tx_ring(struct maio_tx_thread *tx_thread)
 	++tx_thread->tx_counter;
 }
 
-//Zero out Entry and advance counter.
-//In case of refill packet dont allow user to try and reclaim packet
-static inline void advance_tx_ring_refill(struct maio_tx_thread *tx_thread)
-{
-	u16 idx = tx_thread->tx_counter & (tx_thread->tx_sz -1);
-	tx_thread->tx_ring[idx] = 0;
-	++tx_thread->tx_counter;
-}
-
 struct sk_buff *maio_build_linear_rx_skb(struct net_device *netdev, void *va, size_t size)
 {
 	void *page_address = (void *)((u64)va & PAGE_MASK);
@@ -1101,6 +1035,7 @@ static void maio_zc_tx_callback(struct ubuf_info *ubuf, bool zc_success)
 
 	if (refcount_dec_and_test(&ubuf->refcnt)) {
 		__set_page_state(md, MAIO_PAGE_USER, __LINE__);
+		inc_state(MAIO_COMP_TX);
 		in_transit = 0;
 	}
 
@@ -1132,7 +1067,8 @@ static inline int maio_set_comp_handler(struct sk_buff *skb, struct io_md *md)
 	return 1;
 }
 
-static inline void collect_lwm_page(struct page *page, void *kaddr)
+#if 0
+static inline void collect_refill_page(struct page *page, void *kaddr)
 {
 	trace_debug("TX] Zero refcount page %llx(state %llx [%u]<%llx>[%u] )[%d] addr %llx -- PANIC\n"
 			"TX] transit %d transitcnt %u [%d/%d]\n",
@@ -1148,6 +1084,7 @@ static inline void collect_lwm_page(struct page *page, void *kaddr)
 	set_page_state(page, MAIO_PAGE_FREE);
 	maio_free_elem(kaddr, 0);
 }
+#endif
 
 static inline void *common_egress_handling(void *kaddr, struct page *page, u64 uaddr)
 {
@@ -1267,7 +1204,6 @@ int maio_post_tx_page(void *state)
 	struct io_md *md;
 	u64 uaddr = 0;
 	int copy = 0, cnt = 0;
-	bool local_lwm = lwm_triggered;
 	u64 netdev_idx = tx_thread->dev_idx;
 
 	assert(netdev_idx != -1);
@@ -1279,27 +1215,10 @@ int maio_post_tx_page(void *state)
 		void 		*kaddr	= uaddr2addr(uaddr);
 		struct page     *page	= virt_to_page(kaddr);
 
-		//2) PANIC: Handle is_maio_page -- HeadPage on TX?!
 		if ((md = common_egress_handling(kaddr, page, uaddr)) == NULL) {
 			advance_tx_ring(tx_thread);
 			continue;
 		}
-
-		//1) HeaPage on Refill
-		/* A refill page from user following an lwm crosss */
-		if (unlikely(!md->len)) {
-			if (PageHead(page)) {
-				trace_printk("Ignoring HEadPage on LWM\m");
-				advance_tx_ring(tx_thread);
-			} else {
-				collect_lwm_page(page, kaddr);
-				local_lwm = false;
-				advance_tx_ring_refill(tx_thread);
-			}
-			continue;
-		}
-
-		set_page_state(page, MAIO_PAGE_TX);
 
 		skb = maio_build_linear_tx_skb(tx_thread->netdev, kaddr, md->len);
 		if (unlikely(!skb)) {
@@ -1316,6 +1235,8 @@ int maio_post_tx_page(void *state)
 		if (likely(maio_set_comp_handler(skb, md))) {
 			skb_batch[cnt++] = skb;
 			get_page(page);
+			set_page_state(page, MAIO_PAGE_TX);
+			inc_state(MAIO_START_TX);
 		} else {
 			pr_err("Leaking a TX buffer due to ubuf_info alloc failure");//TODO: HAndle this
 		}
@@ -1331,8 +1252,6 @@ int maio_post_tx_page(void *state)
 		copy = maio_xmit(tx_thread->netdev, skb_batch, cnt);
 
 	trace_debug("%d: Sending %d buffers. rc %d\n", smp_processor_id(), cnt, copy);
-
-	lwm_triggered = local_lwm;
 
 	//TODO: return #sent
 	return cnt;
@@ -1528,7 +1447,6 @@ static int maio_post_napi_page(struct maio_tx_thread *tx_thread/*, struct napi_s
 	struct io_md *md;
 	u64 uaddr = 0;
 	int cnt = 0;
-	bool local_lwm = lwm_triggered;
 	u64 netdev_idx = tx_thread->dev_idx;
 
 	assert(netdev_idx != -1);
@@ -1543,18 +1461,6 @@ static int maio_post_napi_page(struct maio_tx_thread *tx_thread/*, struct napi_s
 		if ((md = common_egress_handling(kaddr, page, uaddr)) == NULL) {
 			advance_tx_ring(tx_thread);
 			//TODO: This is a memory leak -- add completion handing here.
-			continue;
-		}
-
-		/* A refill page from user following an lwm crosss */
-		if (unlikely(!md->len)) {
-			if (PageHead(page)) {
-				advance_tx_ring(tx_thread);
-			} else {
-				collect_lwm_page(page, kaddr);
-				local_lwm = false;
-				advance_tx_ring_refill(tx_thread);
-			}
 			continue;
 		}
 
@@ -1578,7 +1484,6 @@ static int maio_post_napi_page(struct maio_tx_thread *tx_thread/*, struct napi_s
 		if (unlikely(cnt >= NAPI_BATCH_SIZE))
 			break;
 	}
-	lwm_triggered = local_lwm;
 
 	/*
 		No need to check rc, we have no IRQs to arm.
@@ -1762,10 +1667,7 @@ static inline ssize_t maio_add_pages_0(struct file *file, const char __user *buf
 		}
 	}
 	kfree(kbuff);
-	maio_mag_hwm = mag_get_full_count(&global_maio.mag[0]);
-	maio_mag_hwm += (maio_mag_hwm >> 3); //+12% of initial
 
-	pr_err("%s} HWM %ld LWM %ld lwm trigger %s\n", __FUNCTION__, maio_mag_hwm, maio_mag_lwm, lwm_triggered ? "OFF": "ON");
 	dump_memory_stats(NULL);
 	return 0;
 }
