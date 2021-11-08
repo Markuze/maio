@@ -35,7 +35,7 @@ static char* maio_stat_names[] = {
 	"Refill Page	",
 	"Pushed Pages	",
 	"Start TX 	",
-	"Comp TX	",
+	"Completion TX	",
 };
 
 typedef atomic64_t maio_cntr;
@@ -61,6 +61,24 @@ struct memory_stats {
 
 #define NR_MAIO_STATS	(sizeof(struct memory_stats)/sizeof(maio_cntr))
 
+#if 0
+struct err_entry {
+	char 		*str;
+	maio_cntr	cntr;
+};
+
+#define NEW_ERR(name, str, val)	{.string = str; }, \
+				#define name	val
+
+struct error_counters {
+	struct err_entry[] = {
+		NEW_ERR(RANDOM_ERR, "some random err", 1);
+		NEW_ERR(RANDOM_ERR_2, "some random err 2 ", 2);
+	};
+};
+
+#endif
+
 struct io_md {
 	u64 state;
 
@@ -82,12 +100,21 @@ struct io_md {
 	u64 prev_state;
 	u32 prev_line;
 	struct ubuf_info *uarg;
-	//struct ubuf_info uarg ;
 } ____cacheline_aligned_in_smp;
 
 #define IO_MD_OFF      (PAGE_SIZE - SKB_DATA_ALIGN(sizeof(struct io_md)))
 #define SHADOW_OFF     (IO_MD_OFF - SKB_DATA_ALIGN(sizeof(struct skb_shared_info)) \
                                        - SKB_DATA_ALIGN(sizeof(struct io_md)))
 
+struct skb_inline_data {
+	union {
+		u8	data[SMP_CACHE_BYTES];
+		struct {
+			struct list_head	list;
+			void *ctx;
+		};
+	};
+	struct skb_shared_info shinfo ____cacheline_aligned_in_smp;
+};
 
 #endif //__IO_MD_H

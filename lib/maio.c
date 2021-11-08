@@ -62,16 +62,16 @@ static unsigned last_dev_idx;
 
 static u16 maio_headroom	= (0x800 -512 -192); 	//This should make a zero gap between vc_pckt and headroom + data
 
-static struct kmem_cache *ubuf_cache;
+static struct kmem_cache *misc_cache;
 
-/* HP Cache */
-static LIST_HEAD(hp_cache);
-DEFINE_SPINLOCK(hp_cache_lock);
-static unsigned long hp_cache_size;
+static struct kmem_cache *ubuf_cache;
+static struct ubuf_info *ubuf_cache_head;
+DEFINE_SPINLOCK(ubuf_cache_lock);
+static unsigned long ubuf_cache_size;
 
 /* Head Page Cache */
 /* A workaround, Head Pages Refcounts may go up/down due to new process mapping or old processes leaving.
-   We use the first 4K pages for internal MAIO uses (e.g., magazine alloc, copied I/O)
+   We use the first 4K pages for copy RX allocations and TX which doesnt use refcounts.
 */
 static LIST_HEAD(head_cache);
 DEFINE_SPINLOCK(head_cache_lock);
@@ -122,7 +122,8 @@ static void dump_memory_stats(struct seq_file *m)
 	long long int delta;
 
 	delta = atomic_long_read(&memory_stats.nr_page_initial) - atomic_long_read(&memory_stats.page_free)
-		-atomic_long_read(&memory_stats.page_rx) -atomic_long_read(&memory_stats.page_network_stack);
+		-atomic_long_read(&memory_stats.page_rx) -atomic_long_read(&memory_stats.page_network_stack)
+		-atomic_long_read(&memory_stats.page_head);
 
 	if (m)
 		seq_printf(m, " Mags: %d (%d) delta %lld)\n",
@@ -339,65 +340,43 @@ static inline u64 addr2uaddr(void *addr)
 
 static inline void maio_cache_head(struct page *page)
 {
-	struct maio_cached_buffer *buffer = page_address(page);
-	unsigned long head_cache_flags;
+	unsigned long flags;
+	struct skb_inline_data *buf = kmem_cache_alloc(misc_cache, GFP_KERNEL|__GFP_ZERO);
 
-	spin_lock_irqsave(&head_cache_lock, head_cache_flags);
-	list_add(&buffer->list, &head_cache);
+	if (unlikely(!buf)) {
+		//TODO: error counter here.
+		pr_err("%s) Failed to alloc from cache\n", __FUNCTION__);
+		return;
+	}
+	buf->ctx = page;
+
+	spin_lock_irqsave(&head_cache_lock, flags);
+	list_add(&buf->list, &head_cache);
 	++head_cache_size;
-	spin_unlock_irqrestore(&head_cache_lock, head_cache_flags);
+	spin_unlock_irqrestore(&head_cache_lock, flags);
 }
 
 static inline struct page *maio_get_cached_head(void)
 {
-	struct maio_cached_buffer *buffer;
-	unsigned long head_cache_flags;
+	unsigned long flags;
+	struct page *page = NULL;
+	struct skb_inline_data *buffer;
 
-	spin_lock_irqsave(&head_cache_lock, head_cache_flags);
+	//TODO: Add counter
+	spin_lock_irqsave(&head_cache_lock, flags);
 
 	buffer = list_first_entry_or_null(&head_cache,
-						struct maio_cached_buffer, list);
+						struct skb_inline_data, list);
 	if (likely(buffer)) {
 		list_del(&buffer->list);
+		page = buffer->ctx;
+		buffer->ctx = NULL;
+		kmem_cache_free(misc_cache, buffer);
 		--head_cache_size;
 	}
-	spin_unlock_irqrestore(&head_cache_lock, head_cache_flags);
+	spin_unlock_irqrestore(&head_cache_lock, flags);
 
-	return (buffer) ? virt_to_page(buffer): NULL;
-}
-
-static inline void maio_cache_hp(struct page *page)
-{
-	struct maio_cached_buffer *buffer = page_address(page);
-	unsigned long hp_cache_flags;
-
-	/* The text is not where you expect: use char* buffer to use 16.... *facepalm* */
-	snprintf((char *)&buffer[1], 64, "heya!! %llx:%llx\n", (u64)buffer, addr2uaddr(buffer));
-	trace_debug("Written text to %llx:%llx\n", (u64)&buffer[1], addr2uaddr(buffer));
-	spin_lock_irqsave(&hp_cache_lock, hp_cache_flags);
-	list_add(&buffer->list, &hp_cache);
-	++hp_cache_size;
-	spin_unlock_irqrestore(&hp_cache_lock, hp_cache_flags);
-}
-
-static inline struct page *maio_get_cached_hp(void)
-{
-	struct maio_cached_buffer *buffer;
-	unsigned long hp_cache_flags;
-
-	spin_lock_irqsave(&hp_cache_lock, hp_cache_flags);
-
-	buffer = list_first_entry_or_null(&hp_cache,
-						struct maio_cached_buffer, list);
-	if (likely(buffer)) {
-		list_del(&buffer->list);
-		--hp_cache_size;
-	} else {
-		panic("Exhausted page cache!");
-	}
-	spin_unlock_irqrestore(&hp_cache_lock, hp_cache_flags);
-
-	return (buffer) ? virt_to_page(buffer): NULL;
+	return page;
 }
 
 static inline int order2idx(size_t order)
@@ -753,29 +732,18 @@ static inline int filter_packet(void *addr)
 static inline void collect_rx_refill_page(u64 addr)
 {
 	void *kaddr = uaddr2addr(addr & PAGE_MASK);
+	struct io_md *md = virt2io_md(kaddr);
 	struct page *page = virt_to_page(kaddr);
 
-#if 0
-	if (!((u64)kaddr & MAIO_MASK_MAX)) {
-		trace_printk("Huge Page, leak [%llx/%llx]\n", (u64)page, (u64)kaddr);
-		md->state = MAIO_POISON;
-		md->line = __LINE__;
-	} else {
-		md->state = MAIO_PAGE_REFILL;
-		md->line = __LINE__;
-		maio_free_elem(kaddr, 0);
-	}
-#endif
+	inc_state(MAIO_PAGE_REFILL);
 
 	if (PageHead(page)) {
-		//trace_debug("[%ld]Caching %llx [%llx]  - P %llx[%d]\n", len, (u64 )kbase, meta->bufs[len],
-		//	(u64)page, page_ref_count(page));
-		//maio_cache_head(page);
-		//set_maio_is_io(page);
-		set_page_state(page, MAIO_PAGE_HEAD); // Need to add on NEW USER pages.
+		md->state = MAIO_PAGE_USER;
+		maio_cache_head(page);
+		set_page_state(page, MAIO_PAGE_HEAD);
 		assert(!is_maio_page(page));
+		pr_err("Warning PageHead received by refill\n");
 	} else {
-		struct io_md *md = virt2io_md(kaddr);
 
 		assert(is_maio_page(page));
 		assert(get_maio_elem_order(__compound_head(page, 0)) == 0);
@@ -785,7 +753,6 @@ static inline void collect_rx_refill_page(u64 addr)
 		}
 		/* page refill is set by user */
 		md->state = MAIO_PAGE_USER;
-		inc_state(MAIO_PAGE_REFILL);
 		set_page_count(page, 0);
 		set_page_state(page, MAIO_PAGE_FREE);
 		maio_free_elem(kaddr, 0);
@@ -836,8 +803,16 @@ static inline int __maio_post_rx_page(struct net_device *netdev, struct page *pa
 	if (!page) {
 		void *buff;
 
-		page = __maio_alloc_page();
+		/*TODO: Teardown */
+		if (unlikely(head_cache_size)) {
+			page = maio_get_cached_head();
+		}
+
+		if (!page)
+			page = __maio_alloc_page();
+
 		if (unlikely(!page)) {
+			//TODO: Err counter here
 			return 0;
 		}
 
@@ -861,7 +836,7 @@ static inline int __maio_post_rx_page(struct net_device *netdev, struct page *pa
 	}
 #endif
 
-	assert(get_page_state(page) == MAIO_PAGE_RX);
+	assert(get_page_state(page) & (MAIO_PAGE_RX|MAIO_PAGE_HEAD));
 
 	set_page_state(page, MAIO_PAGE_USER);
 	assert(uaddr2addr(addr2uaddr(addr)) == addr);
@@ -1044,11 +1019,57 @@ static void maio_zc_tx_callback(struct ubuf_info *ubuf, bool zc_success)
 	trace_debug("%s: TX in_transit %s [%d]<%d>\n", __FUNCTION__,
 			in_transit ? "YES": "NO", refcount_read(&ubuf->refcnt), md->in_transit_dbg);
 }
-//skb_zcopy_clear
+
+static inline void maio_clear_ubuf_cache(void)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&ubuf_cache_lock, flags);
+	while (ubuf_cache_head) {
+		struct ubuf_info *ubuf = ubuf_cache_head;
+		struct io_md *md = ubuf->ctx;
+
+		ubuf_cache_head = (void *)ubuf->mmp.user;
+
+		if (likely(md->in_transit == 0)) {
+			/* This shouldnt happen -- better leak this */
+			//TODO: Add counter.
+			kmem_cache_free(ubuf_cache, ubuf);
+		}
+		--ubuf_cache_size;
+	}
+	spin_unlock_irqrestore(&ubuf_cache_lock, flags);
+}
+
+static inline void flush_all_memcaches(void)
+{
+	maio_clear_ubuf_cache();
+	pr_err("Flushed ubuf_cache %lu\n", ubuf_cache_size);
+	while (maio_get_cached_head());
+	pr_err("Flushed misc_cache %lu\n", head_cache_size);
+}
+
+static inline struct ubuf_info *maio_ubuf_alloc(void)
+{
+	unsigned long flags;
+	struct ubuf_info *ubuf = kmem_cache_alloc(ubuf_cache, GFP_KERNEL|__GFP_ZERO);
+
+	if (unlikely(!ubuf))
+		return NULL;
+
+	spin_lock_irqsave(&ubuf_cache_lock, flags);
+	ubuf->mmp.user =  (void *)ubuf_cache_head;
+	ubuf_cache_head = ubuf;
+	++ubuf_cache_size;
+	spin_unlock_irqrestore(&ubuf_cache_lock, flags);
+
+	return ubuf;
+}
+
 static inline int maio_set_comp_handler(struct sk_buff *skb, struct io_md *md)
 {
 	if (unlikely(!md->uarg)) {
-		md->uarg = kmem_cache_alloc(ubuf_cache, GFP_KERNEL|__GFP_ZERO);
+		md->uarg = maio_ubuf_alloc();
 		if (unlikely(!md->uarg)) {
 			pr_err("Failed to alloc a ubuf_info!!\n");
 			return 0;
@@ -1118,9 +1139,13 @@ static inline void *common_egress_handling(void *kaddr, struct page *page, u64 u
 
 	if (unlikely(!is_maio_page(page))) {
 
-		if (PageHead(page)) {
-			trace_printk("%s with HeadPage\n", __FUNCTION__);
+		if (!PageHead(page)) {
+			pr_err("This shit cant happen!\n"); //uaddr2addr would fail first
+			return NULL;
+		}
 #if 0
+		else {
+			trace_printk("%s with HeadPage\n", __FUNCTION__);
 # Now with zc-callback we dont care about HeadPages on TX.
 			void *buff;
 
@@ -1154,20 +1179,10 @@ static inline void *common_egress_handling(void *kaddr, struct page *page, u64 u
 			set_page_state(page, MAIO_PAGE_USER);
 
 			kaddr = buff;
-#endif
 		} else {
-			pr_err("This shit cant happen!\n"); //uaddr2addr would fail first
-			return NULL;
-		}
-	}
-#if 0
-	//no longer a valid check with user zc retrasmit support
-	if (unlikely(md->state > MAIO_PAGE_USER)) {
-		pr_err("%d:%s:%llx :%s\n", smp_processor_id(), __FUNCTION__, (u64)page, PageHead(page)?"HEAD":"Tail");
-		pr_err("ERROR: Page %llx %s state %llx uaddr %llx\n", (u64)page, page == virt_to_page(md) ? "": "EHH... A PROBLEM HUSTON", get_page_state(page), get_maio_uaddr(page));
-		dump_io_md(md, "txMD");
-	}
 #endif
+	}
+
 	if (unlikely(md->poison != MAIO_POISON)) {
 		pr_err("NO MAIO-POISON <%x>Found [%llx] -- Please make sure to put the buffer\n"
 			"page %llx: %s:%s %llx ",
@@ -1648,23 +1663,19 @@ static inline ssize_t maio_add_pages_0(struct file *file, const char __user *buf
 		kbase = (void *)((u64)kbase  & PAGE_MASK);
 
 		if (PageHead(page)) {
-			//trace_debug("[%ld]Caching %llx [%llx]  - P %llx[%d]\n", len, (u64 )kbase, meta->bufs[len],
-			//	(u64)page, page_ref_count(page));
-			//maio_cache_head(page);
-			//set_maio_is_io(page);
+			maio_cache_head(page);
 			set_page_state(page, MAIO_PAGE_HEAD); // Need to add on NEW USER pages.
 			assert(!is_maio_page(page));
-			//memset(page_address(page), 0, PAGE_SIZE);
 		} else {
 			//trace_debug("[%ld]Adding %llx [%llx]  - P %llx[%d]\n", len, (u64 )kbase, meta->bufs[len],
 			//		(u64)page, page_ref_count(page));
 			set_page_count(page, 0);
 			set_page_state(page, MAIO_PAGE_FREE);
-			inc_state(MAIO_PAGE_NEW);
 			assert(get_maio_elem_order(__compound_head(page, 0)) == 0);
 			assert(is_maio_page(page));
 			maio_free_elem(kbase, 0);
 		}
+		inc_state(MAIO_PAGE_NEW);
 	}
 	kfree(kbuff);
 
@@ -1681,6 +1692,7 @@ static inline void reset_global_maio_state(void)
 		dev_map.on_rx[i] = -1;
 	}
 
+	memset(memory_stats, 0, sizeof(memory_stats));
 	memset(maio_devs, 0, sizeof(maio_devs));
 }
 
@@ -1744,6 +1756,9 @@ static inline void maio_stop(void)
 
 	pr_err("flushing MTTS");
 	flush_all_mtts();
+
+	pr_err("Flushing memcaches");
+	flush_all_memcaches();
 	//reset globals
 	//TODO: Validate -- go over all globals
 	reset_global_maio_state();
@@ -1808,12 +1823,6 @@ static inline ssize_t maio_map_page(struct file *file, const char __user *buf,
 		assert(!(uaddr & HUGE_OFFSET));
 		set_maio_uaddr(umem_pages[0], uaddr);
 
-		/* Allow for the Allocator to get elements on demand, flexible support for variable sizes
-		if (cache)
-			maio_cache_hp(umem_pages[0]);
-		*/
-		//trace_debug("Added %llx:%llx (umem %llx:%llx)to MAIO\n", uaddr, (u64)page_address(umem_pages[0]),
-		//			get_maio_uaddr(umem_pages[0]), (u64)uaddr2addr(uaddr));
 	}
 	pr_err("%d: %s maio_maped U[%llx-%llx) K:[%llx-%llx)\n", smp_processor_id(), __FUNCTION__,
 			mtt->start, mtt->end, (u64)uaddr2addr(mtt->start), (u64)uaddr2addr(mtt->end));
@@ -2010,6 +2019,8 @@ static __init int maio_init(void)
 
 	proc_init();
 	ubuf_cache = KMEM_CACHE(ubuf_info, SLAB_HWCACHE_ALIGN);
+	/* TODO: Change to pagefrag? how do you manage skb->data from kmem_cache? */
+	misc_cache = KMEM_CACHE(skb_inline_data, SLAB_HWCACHE_ALIGN);
 	return 0;
 }
 late_initcall(maio_init);
