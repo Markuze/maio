@@ -22,6 +22,7 @@
 					pr_alert("Assertion failed! %s, %s, %s, line %d\n", 	\
 						   #expr, __FILE__, __func__, __LINE__); 	\
 					dump_memory_stats(NULL);				\
+					dump_err_stats(NULL);					\
 					panic("ASSERT FAILED: %s (%s)", __FUNCTION__, #expr); 	\
 				} \
 			} while (0)
@@ -54,7 +55,9 @@ static struct page* mtrx_pages[1<<HUGE_ORDER];
 static struct proc_dir_entry *maio_dir;
 static struct maio_magz global_maio;
 
-static struct memory_stats memory_stats;
+static struct memory_stats 	memory_stats;
+static struct err_stats 	err_stats;
+
 struct user_matrix *global_maio_matrix[MAX_DEV_NUM];
 EXPORT_SYMBOL(global_maio_matrix);
 
@@ -116,6 +119,21 @@ static inline void __dump_io_md(struct io_md *md, const char *txt)
 		txt, md->state, md->len, md->poison, md->vlan_tci, md->flags);
 }
 
+static void dump_err_stats(struct seq_file *m)
+{
+	int i = 0;
+
+	for (i = 0; i < NR_MAIO_ERR_STATS; i++)
+		if (m) {
+			seq_printf(m, "%s\t: %ld\n", err_stat_names[i],
+					atomic_long_read(&err_stats.array[i]));
+		} else {
+			pr_err("%s\t: %ld\n", err_stat_names[i],
+					atomic_long_read(&err_stats.array[i]));
+		}
+
+}
+
 static void dump_memory_stats(struct seq_file *m)
 {
 	int i = 0;
@@ -163,6 +181,14 @@ static inline void inc_state(u64 state)
 		u8 idx = ffs(state >> 9);
 		atomic_long_inc(&memory_stats.array[idx]);
 	}
+}
+
+static inline void inc_err(u64 state)
+{
+	u8 idx = ffs(state >> 1);
+	if (idx > NR_MAIO_ERR_STATS)
+		pr_err("wtf?! %d (%llx)",idx,state);
+	atomic_long_inc(&err_stats.array[idx]);
 }
 
 static inline struct io_md *kaddr2shadow_md(void *kaddr)
@@ -230,6 +256,7 @@ static inline void	dump_page_state(struct page *page)
 		md->in_transit, md->in_transit_dbg, md->tx_cnt, md->tx_compl);
 
 	dump_memory_stats(NULL);
+	dump_err_stats(NULL);
 }
 
 
@@ -344,8 +371,7 @@ static inline void maio_cache_head(struct page *page)
 	struct skb_inline_data *buf = kmem_cache_alloc(misc_cache, GFP_KERNEL|__GFP_ZERO);
 
 	if (unlikely(!buf)) {
-		//TODO: error counter here.
-		pr_err("%s) Failed to alloc from cache\n", __FUNCTION__);
+		inc_err(MAIO_ERR_UBUF_ERR);
 		return;
 	}
 	buf->ctx = page;
@@ -742,7 +768,7 @@ static inline void collect_rx_refill_page(u64 addr)
 		maio_cache_head(page);
 		set_page_state(page, MAIO_PAGE_HEAD);
 		assert(!is_maio_page(page));
-		pr_err("Warning PageHead received by refill\n");
+		inc_err(MAIO_ERR_REFILL_HEAD);
 	} else {
 
 		assert(is_maio_page(page));
@@ -786,6 +812,10 @@ static inline int __maio_post_rx_page(struct net_device *netdev, struct page *pa
 
 	ring_entry = rx_ring_enrty(qp);
 
+	if (unlikely(!ring_entry)) {
+		inc_err(MAIO_ERR_REFILL_MISSING);
+	}
+
 	if (likely(ring_entry & 0x1)) {
 		//TODO: do the HWM handling for HeadPages -- Just push back
 		clear_rx_ring_entry(qp);
@@ -794,8 +824,7 @@ static inline int __maio_post_rx_page(struct net_device *netdev, struct page *pa
 
 	ring_entry = rx_ring_enrty(qp);
 	if (ring_entry) {
-		trace_printk("[%d]User to slow. dropping post of %llx:%llx\n",
-				smp_processor_id(), (u64)addr, addr2uaddr(addr));
+		inc_err(MAIO_ERR_SLOW);
 		return 0;
 	}
 
@@ -900,6 +929,7 @@ int maio_post_rx_page(struct net_device *netdev, void *addr, u32 len, u16 vlan_t
 
 	if ( ! __maio_post_rx_page(netdev, page, addr, len, vlan_tci, flags)) {
 		if (page) {
+			inc_err(MAIO_ERR_NS);
 			set_page_state(page, MAIO_PAGE_NS);
 			put_page(page);
 		}
@@ -932,7 +962,7 @@ int maio_xmit(struct net_device *dev, struct sk_buff **skb, int cnt)
 	for ( i = 0; i < cnt; i++) {
 		err = netdev_start_xmit(skb[i], dev, txq, --more);
 		if (unlikely(err != NETDEV_TX_OK)) {
-			pr_err("netdev_start_xmit failed with %0xx\n", err);
+			inc_err(MAIO_ERR_TX_ERR);
 			consume_skb(skb[i]);
 		}
 	}
@@ -1010,7 +1040,7 @@ static void maio_zc_tx_callback(struct ubuf_info *ubuf, bool zc_success)
 
 	if (refcount_dec_and_test(&ubuf->refcnt)) {
 		__set_page_state(md, MAIO_PAGE_USER, __LINE__);
-		inc_state(MAIO_COMP_TX);
+		inc_err(MAIO_ERR_TX_COMP);
 		in_transit = 0;
 	}
 
@@ -1071,7 +1101,7 @@ static inline int maio_set_comp_handler(struct sk_buff *skb, struct io_md *md)
 	if (unlikely(!md->uarg)) {
 		md->uarg = maio_ubuf_alloc();
 		if (unlikely(!md->uarg)) {
-			pr_err("Failed to alloc a ubuf_info!!\n");
+			inc_err(MAIO_ERR_UBUF_ERR);
 			return 0;
 		}
 	}
@@ -1231,6 +1261,7 @@ int maio_post_tx_page(void *state)
 		struct page     *page	= virt_to_page(kaddr);
 
 		if ((md = common_egress_handling(kaddr, page, uaddr)) == NULL) {
+			inc_err(MAIO_ERR_TX_ERR);
 			advance_tx_ring(tx_thread);
 			continue;
 		}
@@ -1238,6 +1269,7 @@ int maio_post_tx_page(void *state)
 		skb = maio_build_linear_tx_skb(tx_thread->netdev, kaddr, md->len);
 		if (unlikely(!skb)) {
 			pr_err("%s) Failed to alloc skb\n", __FUNCTION__);
+			inc_err(MAIO_ERR_TX_ERR);
 			//put_page(page);
 			//TODO: This is a memory leak -- add completion handing here.
 			advance_tx_ring(tx_thread);
@@ -1251,9 +1283,10 @@ int maio_post_tx_page(void *state)
 			skb_batch[cnt++] = skb;
 			get_page(page);
 			set_page_state(page, MAIO_PAGE_TX);
-			inc_state(MAIO_START_TX);
+			inc_err(MAIO_ERR_TX_START);
 		} else {
 			pr_err("Leaking a TX buffer due to ubuf_info alloc failure");//TODO: HAndle this
+			inc_err(MAIO_ERR_TX_ERR);
 		}
 
 		advance_tx_ring(tx_thread);
@@ -1475,14 +1508,13 @@ static int maio_post_napi_page(struct maio_tx_thread *tx_thread/*, struct napi_s
 
 		if ((md = common_egress_handling(kaddr, page, uaddr)) == NULL) {
 			advance_tx_ring(tx_thread);
-			//TODO: This is a memory leak -- add completion handing here.
+			inc_err(MAIO_ERR_TX_ERR);
 			continue;
 		}
 
-		set_page_state(page, MAIO_PAGE_NAPI);
-
 		skb = maio_build_linear_rx_skb(tx_thread->netdev, kaddr, md->len);
 		if (unlikely(!skb)) {
+			inc_err(MAIO_ERR_TX_ERR);
 			pr_err("Failed to alloc napi skb\n");
 			put_page(page);
 			advance_tx_ring(tx_thread);
@@ -1490,11 +1522,20 @@ static int maio_post_napi_page(struct maio_tx_thread *tx_thread/*, struct napi_s
 		}
 		cnt++;
 		//TODO: set completion handler.
-		get_page(page);
+		if (likely(maio_set_comp_handler(skb, md))) {
+			get_page(page);
+			set_page_state(page, MAIO_PAGE_NAPI);
+			inc_err(MAIO_ERR_NAPI);
+		} else {
+			pr_err("Leaking a TX buffer due to ubuf_info alloc failure");//TODO: HAndle this
+			inc_err(MAIO_ERR_TX_ERR);
+		}
 
 		//OPTION: Use non napi API: netif_rx but lose GRO.
 		netif_rx(skb);
 		//napi_gro_receive(napi, skb);
+
+		advance_tx_ring(tx_thread);
 
 		if (unlikely(cnt >= NAPI_BATCH_SIZE))
 			break;
@@ -1680,6 +1721,7 @@ static inline ssize_t maio_add_pages_0(struct file *file, const char __user *buf
 	kfree(kbuff);
 
 	dump_memory_stats(NULL);
+	dump_err_stats(NULL);
 	return 0;
 }
 
@@ -1692,7 +1734,7 @@ static inline void reset_global_maio_state(void)
 		dev_map.on_rx[i] = -1;
 	}
 
-	memset(memory_stats, 0, sizeof(memory_stats));
+	memset(&memory_stats, 0, sizeof(memory_stats));
 	memset(maio_devs, 0, sizeof(maio_devs));
 }
 
@@ -1893,6 +1935,7 @@ static int maio_map_show(struct seq_file *m, void *v)
 	/* TODO: make usefull */
 	if (global_maio_matrix[last_dev_idx]) {
 		dump_memory_stats(m);
+		dump_err_stats(m);
 	} else {
 		seq_printf(m, "NOT CONFIGURED\n");
 	}

@@ -10,8 +10,6 @@
 /********* Caution: Should be same as user counterpart ************************/
 
 /******** MAIO PAGE STATE FLAGS ****************/
-#define MAIO_COMP_TX		0x40000
-#define MAIO_START_TX		0x20000
 #define MAIO_PAGE_NEW		0x10000
 #define MAIO_PAGE_REFILL	0x8000
 #define MAIO_PAGE_HEAD 		0x4000
@@ -34,8 +32,6 @@ static char* maio_stat_names[] = {
 	"HEAD Page	",
 	"Refill Page	",
 	"Pushed Pages	",
-	"Start TX 	",
-	"Completion TX	",
 };
 
 typedef atomic64_t maio_cntr;
@@ -52,8 +48,6 @@ struct memory_stats {
 			maio_cntr	page_head;
 			maio_cntr	page_refill;
 			maio_cntr	nr_page_initial;
-			maio_cntr	start_tx;
-			maio_cntr	comp_tx;
 		};
 		maio_cntr	array[0];
 	};
@@ -61,23 +55,35 @@ struct memory_stats {
 
 #define NR_MAIO_STATS	(sizeof(struct memory_stats)/sizeof(maio_cntr))
 
-#if 0
-struct err_entry {
-	char 		*str;
-	maio_cntr	cntr;
+/******** MAIO STATE COUNTERS ****************/
+static char* err_stat_names[] = {
+	"TX Send		",
+#define MAIO_ERR_TX_START	0x1
+	"TX Completion		",
+#define MAIO_ERR_TX_COMP	0x2
+	"NAPI Send		",
+#define MAIO_ERR_NAPI  		0x4
+	"TX Error		",
+#define MAIO_ERR_TX_ERR		0x8
+	"NS packet		",
+#define MAIO_ERR_NS		0x10
+	"RX user slow		",
+#define MAIO_ERR_RX_SLOW	0x20
+	"ubuf alloc err		",
+#define MAIO_ERR_UBUF_ERR	0x40
+	"HeadPage on RX		",
+#define MAIO_ERR_REFILL_HEAD	0x80
+	"Slow User on RX	",
+#define MAIO_ERR_SLOW		0x100
+	"Missing Refill		",
+#define MAIO_ERR_REFILL_MISSING	0x200
 };
 
-#define NEW_ERR(name, str, val)	{.string = str; }, \
-				#define name	val
+#define NR_MAIO_ERR_STATS	(sizeof(err_stat_names)/sizeof(char *))
 
-struct error_counters {
-	struct err_entry[] = {
-		NEW_ERR(RANDOM_ERR, "some random err", 1);
-		NEW_ERR(RANDOM_ERR_2, "some random err 2 ", 2);
-	};
+struct err_stats {
+		maio_cntr	array[NR_MAIO_ERR_STATS];
 };
-
-#endif
 
 struct io_md {
 	u64 state;
