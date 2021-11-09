@@ -783,7 +783,6 @@ static inline void collect_rx_refill_page(u64 addr)
 		set_page_state(page, MAIO_PAGE_FREE);
 		maio_free_elem(kaddr, 0);
 	}
-
 }
 
 //TODO: Add support for vlan detection __vlan_hwaccel
@@ -817,14 +816,13 @@ static inline int __maio_post_rx_page(struct net_device *netdev, struct page *pa
 	}
 
 	if (likely(ring_entry & 0x1)) {
-		//TODO: do the HWM handling for HeadPages -- Just push back
 		clear_rx_ring_entry(qp);
 		collect_rx_refill_page(ring_entry);
 	}
 
 	ring_entry = rx_ring_enrty(qp);
 	if (ring_entry) {
-		inc_err(MAIO_ERR_SLOW);
+		inc_err(MAIO_ERR_RX_SLOW);
 		return 0;
 	}
 
@@ -841,7 +839,7 @@ static inline int __maio_post_rx_page(struct net_device *netdev, struct page *pa
 			page = __maio_alloc_page();
 
 		if (unlikely(!page)) {
-			//TODO: Err counter here
+			inc_err(MAIO_ERR_RX_ALLOC);
 			return 0;
 		}
 

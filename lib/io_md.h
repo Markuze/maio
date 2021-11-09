@@ -73,8 +73,8 @@ static char* err_stat_names[] = {
 #define MAIO_ERR_UBUF_ERR	0x40
 	"HeadPage on RX		",
 #define MAIO_ERR_REFILL_HEAD	0x80
-	"Slow User on RX	",
-#define MAIO_ERR_SLOW		0x100
+	"Alloc Error on RX	",
+#define MAIO_ERR_RX_ALLOC	0x100
 	"Missing Refill		",
 #define MAIO_ERR_REFILL_MISSING	0x200
 };
