@@ -784,13 +784,33 @@ static inline void collect_rx_refill_page(u64 addr)
 		maio_free_elem(kaddr, 0);
 	}
 }
+static inline int prep_rx_ring_entry(struct percpu_maio_qp *qp)
+{
+	u64 ring_entry = rx_ring_enrty(qp);
+
+	if (unlikely(!ring_entry)) {
+		inc_err(MAIO_ERR_REFILL_MISSING);
+	}
+
+	if (likely(ring_entry & 0x1)) {
+		clear_rx_ring_entry(qp);
+		collect_rx_refill_page(ring_entry);
+	}
+
+	ring_entry = rx_ring_enrty(qp);
+	if (ring_entry) {
+		inc_err(MAIO_ERR_RX_SLOW);
+		return 1;
+	}
+
+	return 0;
+}
 
 //TODO: Add support for vlan detection __vlan_hwaccel
 static inline int __maio_post_rx_page(struct net_device *netdev, struct page *page,
 					void *addr, u32 len, u16 vlan_tci, u16 flags)
 {
 	u64 qp_idx = get_rx_qp_idx(netdev);
-	u64 ring_entry;
 	struct io_md *md;
 	struct percpu_maio_dev_qp *dev_qp = this_cpu_ptr(&maio_dev_qp);
 	struct percpu_maio_qp *qp;
@@ -809,29 +829,14 @@ static inline int __maio_post_rx_page(struct net_device *netdev, struct page *pa
 		return 0;
 	}
 
-	ring_entry = rx_ring_enrty(qp);
-
-	if (unlikely(!ring_entry)) {
-		inc_err(MAIO_ERR_REFILL_MISSING);
-	}
-
-	if (likely(ring_entry & 0x1)) {
-		clear_rx_ring_entry(qp);
-		collect_rx_refill_page(ring_entry);
-	}
-
-	ring_entry = rx_ring_enrty(qp);
-	if (ring_entry) {
-		inc_err(MAIO_ERR_RX_SLOW);
+	if (unlikely(prep_rx_ring_entry(qp)))
 		return 0;
-	}
 
 	trace_debug("kaddr %llx, len %d\n", (u64)addr, len);
 	if (!page) {
 		void *buff;
 
-		/*TODO: Teardown */
-		if (unlikely(head_cache_size)) {
+		if (head_cache_size) {
 			page = maio_get_cached_head();
 		}
 
@@ -880,6 +885,17 @@ static inline int __maio_post_rx_page(struct net_device *netdev, struct page *pa
 			page ? "COPY" : "ZC",
 			(u64)addr, len,
 			addr2uaddr(addr), page_ref_count(page));
+
+#define HP_CACHE_LIM 16
+	if (unlikely(head_cache_size > HP_CACHE_LIM)) {
+		if ( ! prep_rx_ring_entry(qp)) {
+			struct page *page = maio_get_cached_head();
+			if (likely(page)) {
+				inc_err(MAIO_ERR_HEAD_RETURNED);
+				post_rx_ring(qp, addr2uaddr(page_address(page)));
+			}
+		}
+	}
 
 #else
 /***************
@@ -1702,8 +1718,8 @@ static inline ssize_t maio_add_pages_0(struct file *file, const char __user *buf
 		kbase = (void *)((u64)kbase  & PAGE_MASK);
 
 		if (PageHead(page)) {
+			set_page_state(page, MAIO_PAGE_HEAD);
 			maio_cache_head(page);
-			set_page_state(page, MAIO_PAGE_HEAD); // Need to add on NEW USER pages.
 			assert(!is_maio_page(page));
 		} else {
 			//trace_debug("[%ld]Adding %llx [%llx]  - P %llx[%d]\n", len, (u64 )kbase, meta->bufs[len],

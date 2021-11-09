@@ -77,6 +77,8 @@ static char* err_stat_names[] = {
 #define MAIO_ERR_RX_ALLOC	0x100
 	"Missing Refill		",
 #define MAIO_ERR_REFILL_MISSING	0x200
+	"HeadPage returned	",
+#define MAIO_ERR_HEAD_RETURNED	0x400
 };
 
 #define NR_MAIO_ERR_STATS	(sizeof(err_stat_names)/sizeof(char *))
