@@ -833,6 +833,16 @@ static inline int __maio_post_rx_page(struct net_device *netdev, struct page *pa
 		return 0;
 
 	trace_debug("kaddr %llx, len %d\n", (u64)addr, len);
+
+#define HP_CACHE_LIM 16
+	if (unlikely(head_cache_size > HP_CACHE_LIM)) {
+		if (page) {
+			inc_err(MAIO_ERR_HEAD_RETURNED);
+			put_page(page);
+			page = NULL;
+		}
+	}
+
 	if (!page) {
 		void *buff;
 
@@ -885,18 +895,6 @@ static inline int __maio_post_rx_page(struct net_device *netdev, struct page *pa
 			page ? "COPY" : "ZC",
 			(u64)addr, len,
 			addr2uaddr(addr), page_ref_count(page));
-
-#define HP_CACHE_LIM 16
-	if (unlikely(head_cache_size > HP_CACHE_LIM)) {
-		if ( ! prep_rx_ring_entry(qp)) {
-			struct page *page = maio_get_cached_head();
-			if (likely(page)) {
-				inc_err(MAIO_ERR_HEAD_RETURNED);
-				post_rx_ring(qp, addr2uaddr(page_address(page)));
-			}
-		}
-	}
-
 #else
 /***************
 	Testing NAPI code:
