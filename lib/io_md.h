@@ -79,6 +79,12 @@ static char* err_stat_names[] = {
 #define MAIO_ERR_REFILL_MISSING	0x200
 	"HeadPage returned	",
 #define MAIO_ERR_HEAD_RETURNED	0x400
+	"TX Error on netdev	",
+#define MAIO_ERR_TX_ERR_NETDEV	0x800
+	"Non I/O Page released	",
+#define MAIO_ERR_BAD_FREE_PAGE	0x1000
+	"Bad RC on page		",
+#define MAIO_ERR_BAD_RC		0x2000
 };
 
 #define NR_MAIO_ERR_STATS	(sizeof(err_stat_names)/sizeof(char *))

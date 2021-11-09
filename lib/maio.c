@@ -434,6 +434,9 @@ static inline void __maio_free(struct page *page, void *addr)
 		pr_err("ERROR: Page %llx state %llx uaddr %llx\n", (u64)page, get_page_state(page), get_maio_uaddr(page));
 		pr_err("%d:%s:%llx :%s\n", smp_processor_id(), __FUNCTION__, (u64)page_address(page), PageHead(page)?"HEAD":"Tail");
 		dump_io_md(virt2io_md(addr), "MD");
+		set_page_state(page, MAIO_PAGE_USER);
+		inc_err(MAIO_ERR_BAD_FREE_PAGE);
+		init_page_count(page);
 #if 0
 		dump_io_md(kaddr2shadow_md(addr), "SHADOW");
 		if (kaddr2shadow_md(addr)->state == MAIO_PAGE_NAPI) {
@@ -972,10 +975,17 @@ int maio_xmit(struct net_device *dev, struct sk_buff **skb, int cnt)
         //refcount_add(burst, &pkt_dev->skb->users);
 
 	for ( i = 0; i < cnt; i++) {
+
+		if (unlikely(page_ref_count(virt_to_page(skb[i]->data)) < 2)) {
+			pr_err("This shit cant happen\n");
+			dump_io_md(virt2io_md(skb[i]->data), "MD");
+			inc_err(MAIO_ERR_BAD_RC);
+		}
 		err = netdev_start_xmit(skb[i], dev, txq, --more);
-		if (unlikely(err != NETDEV_TX_OK)) {
-			inc_err(MAIO_ERR_TX_ERR);
+		if (!dev_xmit_complete(err)) {
+			inc_err(MAIO_ERR_TX_ERR_NETDEV);
 			consume_skb(skb[i]);
+			//kfree_skb(skb);
 		}
 	}
 
