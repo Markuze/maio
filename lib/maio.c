@@ -526,6 +526,8 @@ struct page *__maio_alloc_pages(size_t order)
 			buffer = mag_alloc_elem(&global_maio.mag[order2idx(order)]);
 		*/
 		pr_err("Failed to alloc from MAIO mag [%ps]\n", __builtin_return_address(0));
+		dump_memory_stats(NULL);
+		dump_err_stats(NULL);
 		panic("WTF?!?!");
 		return NULL;
 	}
