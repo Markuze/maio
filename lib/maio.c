@@ -883,7 +883,10 @@ static inline int __maio_post_rx_page(struct net_device *netdev, struct page *pa
 	}
 #endif
 
-	assert(get_page_state(page) & (MAIO_PAGE_RX|MAIO_PAGE_HEAD));
+	if (unlikely( ! (get_page_state(page) & (MAIO_PAGE_RX|MAIO_PAGE_HEAD)))) {
+		dump_page_state(page);
+		assert(get_page_state(page) & (MAIO_PAGE_RX|MAIO_PAGE_HEAD));
+	}
 
 	set_page_state(page, MAIO_PAGE_USER);
 	assert(uaddr2addr(addr2uaddr(addr)) == addr);
