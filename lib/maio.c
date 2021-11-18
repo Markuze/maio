@@ -770,10 +770,10 @@ static inline void collect_rx_refill_page(u64 addr)
 
 	if (PageHead(page)) {
 		md->state = MAIO_PAGE_USER;
-		maio_cache_head(page);
 		set_page_state(page, MAIO_PAGE_HEAD);
 		assert(!is_maio_page(page));
 		inc_err(MAIO_ERR_REFILL_HEAD);
+		maio_cache_head(page);
 	} else {
 
 		assert(is_maio_page(page));
