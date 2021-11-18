@@ -57,34 +57,36 @@ struct memory_stats {
 
 /******** MAIO STATE COUNTERS ****************/
 static char* err_stat_names[] = {
-	"TX Send		",
+	"TX Send			",
 #define MAIO_ERR_TX_START	0x1
-	"TX Completion		",
+	"TX Completion			",
 #define MAIO_ERR_TX_COMP	0x2
-	"NAPI Send		",
+	"NAPI Send			",
 #define MAIO_ERR_NAPI  		0x4
-	"TX Error		",
+	"TX Error			",
 #define MAIO_ERR_TX_ERR		0x8
-	"NS packet		",
+	"NS packet			",
 #define MAIO_ERR_NS		0x10
-	"RX user slow		",
+	"RX user slow			",
 #define MAIO_ERR_RX_SLOW	0x20
-	"ubuf alloc err		",
+	"ubuf alloc err			",
 #define MAIO_ERR_UBUF_ERR	0x40
-	"HeadPage on RX		",
+	"HeadPage on RX			",
 #define MAIO_ERR_REFILL_HEAD	0x80
-	"Alloc Error on RX	",
+	"Alloc Error on RX		",
 #define MAIO_ERR_RX_ALLOC	0x100
-	"Missing Refill		",
+	"Missing Refill			",
 #define MAIO_ERR_REFILL_MISSING	0x200
-	"HeadPage returned	",
+	"HeadPage returned		",
 #define MAIO_ERR_HEAD_RETURNED	0x400
-	"TX Error on netdev	",
+	"TX Error on netdev		",
 #define MAIO_ERR_TX_ERR_NETDEV	0x800
-	"Non I/O Page released	",
+	"Non I/O Page released		",
 #define MAIO_ERR_BAD_FREE_PAGE	0x1000
-	"Bad RC on page		",
+	"Bad RC on page			",
 #define MAIO_ERR_BAD_RC		0x2000
+	"TX Completion in transit	",
+#define MAIO_ERR_TX_COMP_TRANS	0x4000
 };
 
 #define NR_MAIO_ERR_STATS	(sizeof(err_stat_names)/sizeof(char *))

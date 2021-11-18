@@ -57,6 +57,7 @@ static struct maio_magz global_maio;
 
 static struct memory_stats 	memory_stats;
 static struct err_stats 	err_stats;
+static u64 last_comp;
 
 struct user_matrix *global_maio_matrix[MAX_DEV_NUM];
 EXPORT_SYMBOL(global_maio_matrix);
@@ -131,6 +132,13 @@ static void dump_err_stats(struct seq_file *m)
 			pr_err("%s\t: %ld\n", err_stat_names[i],
 					atomic_long_read(&err_stats.array[i]));
 		}
+
+
+	if (m) {
+		seq_printf(m, "%s\t: %llx\n", "Last Comp", last_comp);
+	} else {
+		pr_err("%s\t: %llx\n", "Last Comp", last_comp);
+	}
 
 }
 
@@ -1069,10 +1077,13 @@ static void maio_zc_tx_callback(struct ubuf_info *ubuf, bool zc_success)
 		__set_page_state(md, MAIO_PAGE_USER, __LINE__);
 		inc_err(MAIO_ERR_TX_COMP);
 		in_transit = 0;
+	} else {
+		inc_err(MAIO_ERR_TX_COMP_TRANS);
 	}
 
+	last_comp = addr2uaddr(md);
 	md->in_transit = in_transit;
-	++md->in_transit_dbg;
+	md->in_transit_dbg = rdtsc();
 	trace_debug("%s: TX in_transit %s [%d]<%d>\n", __FUNCTION__,
 			in_transit ? "YES": "NO", refcount_read(&ubuf->refcnt), md->in_transit_dbg);
 }
@@ -1114,6 +1125,7 @@ static inline struct ubuf_info *maio_ubuf_alloc(void)
 	if (unlikely(!ubuf))
 		return NULL;
 
+	memset(ubuf, 0, sizeof(struct ubuf_info));
 	spin_lock_irqsave(&ubuf_cache_lock, flags);
 	ubuf->mmp.user =  (void *)ubuf_cache_head;
 	ubuf_cache_head = ubuf;
