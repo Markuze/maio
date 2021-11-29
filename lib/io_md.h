@@ -104,18 +104,25 @@ struct io_md {
 	u16 flags;
 
 	union {
-		u32 user_bits;
+		u32	user_bits1;
 		struct {
 			u16 tx_cnt;
 			u16 tx_compl;
 		};
 	};
+
+	union {
+		u64	user_bits2;
+		struct {
+			void *next;
+		};
+	};
+
 	volatile u16 in_transit;
 	volatile u16 in_transit_dbg;
 	u32 line;
 	u64 prev_state;
 	u32 prev_line;
-	struct ubuf_info *uarg;
 } ____cacheline_aligned_in_smp;
 
 #define IO_MD_OFF      (PAGE_SIZE - SKB_DATA_ALIGN(sizeof(struct io_md)))

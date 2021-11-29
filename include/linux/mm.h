@@ -800,11 +800,12 @@ static inline unsigned int compound_order(struct page *page)
 static inline void set_compound_order(struct page *page, unsigned int order)
 {
 	page[1].compound_order = order;
-	page[1].compound_nr = 1U << order;
+	//page[1].compound_nr = 1U << order;
 
 	/* HACK: Dont see a reason to add a new API call - this is always need */
 	page[1].elem_order = 0;
 	page[1].uaddr = 0;
+	page[1].uarg = NULL;
 }
 
 

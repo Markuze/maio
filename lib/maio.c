@@ -1137,23 +1137,28 @@ static inline struct ubuf_info *maio_ubuf_alloc(void)
 
 static inline int maio_set_comp_handler(struct sk_buff *skb, struct io_md *md)
 {
-	if (unlikely(!md->uarg)) {
-		md->uarg = maio_ubuf_alloc();
-		if (unlikely(!md->uarg)) {
+	struct page *page = virt_to_page(md);
+	struct ubuf_info *uarg;
+
+	if (unlikely(!page->uarg)) {
+		page->uarg = maio_ubuf_alloc();
+		if (unlikely(!page->uarg)) {
 			inc_err(MAIO_ERR_UBUF_ERR);
 			return 0;
 		}
 	}
+	uarg = page->uarg;
+
 	md->in_transit		= 1;
-	md->uarg->callback	= maio_zc_tx_callback;
-	md->uarg->ctx 		= md;
-	refcount_inc(&md->uarg->refcnt);
+	uarg->callback		= maio_zc_tx_callback;
+	uarg->ctx 		= md;
+	refcount_inc(&uarg->refcnt);
 
 	//trace_printk("%s: TX in_transit %s [%d]\n", __FUNCTION__,
 	//		md->in_transit ? "YES": "NO", refcount_read(&md->uarg.refcnt));
 
 	skb_shinfo(skb)->tx_flags |= SKBTX_DEV_ZEROCOPY;
-	skb_shinfo(skb)->destructor_arg = md->uarg;
+	skb_shinfo(skb)->destructor_arg = uarg;
 	return 1;
 }
 
