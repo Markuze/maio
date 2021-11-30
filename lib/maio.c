@@ -983,7 +983,9 @@ int maio_xmit(struct net_device *dev, struct sk_buff **skb, int cnt)
 
         if (unlikely(netif_xmit_frozen_or_drv_stopped(txq))) {
 		err = -EBUSY;
-                goto unlock;
+		inc_err(MAIO_ERR_TX_BUSY);
+
+		goto unlock;
         }
         //refcount_add(burst, &pkt_dev->skb->users);
 
@@ -1083,7 +1085,7 @@ static void maio_zc_tx_callback(struct ubuf_info *ubuf, bool zc_success)
 
 	last_comp = addr2uaddr(md);
 	md->in_transit = in_transit;
-	md->in_transit_dbg = rdtsc();
+	md->in_transit_dbg++;
 	trace_debug("%s: TX in_transit %s [%d]<%d>\n", __FUNCTION__,
 			in_transit ? "YES": "NO", refcount_read(&ubuf->refcnt), md->in_transit_dbg);
 }
@@ -1303,6 +1305,14 @@ static inline void *common_egress_handling(void *kaddr, struct page *page, u64 u
 	return md;
 }
 
+static inline void maio_free_skb_batch(struct sk_buff **skb, int cnt)
+{
+	while (cnt--) {
+		consume_skb(*skb);
+		++skb;
+	}
+}
+
 #define TX_BATCH_SIZE	32
 int maio_post_tx_page(void *state)
 {
@@ -1310,7 +1320,7 @@ int maio_post_tx_page(void *state)
 	struct sk_buff *skb_batch[TX_BATCH_SIZE];
 	struct io_md *md;
 	u64 uaddr = 0;
-	int copy = 0, cnt = 0;
+	int rc = 0, cnt = 0;
 	u64 netdev_idx = tx_thread->dev_idx;
 
 	assert(netdev_idx != -1);
@@ -1332,8 +1342,6 @@ int maio_post_tx_page(void *state)
 		if (unlikely(!skb)) {
 			pr_err("%s) Failed to alloc skb\n", __FUNCTION__);
 			inc_err(MAIO_ERR_TX_ERR);
-			//put_page(page);
-			//TODO: This is a memory leak -- add completion handing here.
 			advance_tx_ring(tx_thread);
 			continue;
 		}
@@ -1347,7 +1355,7 @@ int maio_post_tx_page(void *state)
 			set_page_state(page, MAIO_PAGE_TX);
 			inc_err(MAIO_ERR_TX_START);
 		} else {
-			pr_err("Leaking a TX buffer due to ubuf_info alloc failure");//TODO: HAndle this
+			pr_err("ubuf_info alloc failure");
 			inc_err(MAIO_ERR_TX_ERR);
 		}
 
@@ -1359,11 +1367,9 @@ int maio_post_tx_page(void *state)
 
 	trace_debug("%d: Sending %d buffers. counter %lu\n", smp_processor_id(), cnt, tx_thread->tx_counter);
 	if (cnt)
-		copy = maio_xmit(tx_thread->netdev, skb_batch, cnt);
+		if ((rc = maio_xmit(tx_thread->netdev, skb_batch, cnt)))
+			maio_free_skb_batch(skb_batch, cnt);
 
-	trace_debug("%d: Sending %d buffers. rc %d\n", smp_processor_id(), cnt, copy);
-
-	//TODO: return #sent
 	return cnt;
 }
 

@@ -87,6 +87,8 @@ static char* err_stat_names[] = {
 #define MAIO_ERR_BAD_RC		0x2000
 	"TX Completion in transit	",
 #define MAIO_ERR_TX_COMP_TRANS	0x4000
+	"TX Dev Busy			",
+#define MAIO_ERR_TX_BUSY	0x8000
 };
 
 #define NR_MAIO_ERR_STATS	(sizeof(err_stat_names)/sizeof(char *))
