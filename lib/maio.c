@@ -280,12 +280,12 @@ static inline void flush_all_mtts(void)
 		/* Current implememntation 5.4 is enough to put only the head page */
 		pr_err("%s:freeing MTT [0x%llx - 0x%llx) len %d\n", __FUNCTION__, mtt->start, mtt->end, mtt->len);
 		for (; i < mtt->len; i++) {
-			set_maio_uaddr(mtt->pages[i], 0);
-			trace_debug("%llx rc: %d\n", (unsigned long long)mtt->pages[i],
-							page_ref_count(mtt->pages[i]));
+			set_maio_uaddr(mtt->mapped_pages[i].page, 0);
+			trace_debug("%llx rc: %d\n", (unsigned long long)mtt->mapped_pages[i].page,
+							page_ref_count(mtt->mapped_pages[i].page));
+			put_user_page(mtt->mapped_pages[i].page);
 		}
 
-		put_user_pages(mtt->pages, mtt->len);
 		rb_erase(node, &mtt_tree);
 		kfree(mtt);
 		node = mtt_tree.rb_node;
@@ -360,7 +360,7 @@ static inline void *uaddr2addr(u64 addr)
 
 	if (i < 0)
 		return NULL;
-	return page_address(mtt->pages[i]) + offset;
+	return page_address(mtt->mapped_pages[i].page) + offset;
 }
 
 static inline u64 addr2uaddr(void *addr)
@@ -1135,19 +1135,37 @@ static inline struct ubuf_info *maio_ubuf_alloc(void)
 	return ubuf;
 }
 
+static inline struct ubuf_info *get_maio_page_uarg(struct page *page)
+{
+	struct ubuf_info **arr = get_maio_uarg(page);
+
+	assert(arr);
+
+	return arr[(int)(page - compound_head(page))];
+}
+
+static inline void set_maio_page_uarg(struct page *page, struct ubuf_info *uarg)
+{
+	struct ubuf_info **arr = get_maio_uarg(page);
+
+	assert(arr);
+
+	arr[(int)(page - compound_head(page))] = uarg;
+}
+
 static inline int maio_set_comp_handler(struct sk_buff *skb, struct io_md *md)
 {
 	struct page *page = virt_to_page(md);
-	struct ubuf_info *uarg;
+	struct ubuf_info *uarg = get_maio_page_uarg(page);
 
-	if (unlikely(!page->uarg)) {
-		page->uarg = maio_ubuf_alloc();
-		if (unlikely(!page->uarg)) {
+	if (unlikely(!uarg)) {
+		uarg = maio_ubuf_alloc();
+		if (unlikely(!uarg)) {
 			inc_err(MAIO_ERR_UBUF_ERR);
 			return 0;
 		}
+		set_maio_page_uarg(page, uarg);
 	}
-	uarg = page->uarg;
 
 	md->in_transit		= 1;
 	uarg->callback		= maio_zc_tx_callback;
@@ -1752,8 +1770,8 @@ static inline ssize_t maio_add_pages_0(struct file *file, const char __user *buf
 			maio_cache_head(page);
 			assert(!is_maio_page(page));
 		} else {
-			//trace_debug("[%ld]Adding %llx [%llx]  - P %llx[%d]\n", len, (u64 )kbase, meta->bufs[len],
-			//		(u64)page, page_ref_count(page));
+			trace_debug("[%ld]Adding %llx [%llx]  - P %llx[%d] <%d - %zu>\n", len, (u64 )kbase, meta->bufs[len],
+					(u64)page, page_ref_count(page), (int)(page - compound_head(page)), len);
 			set_page_count(page, 0);
 			set_page_state(page, MAIO_PAGE_FREE);
 			assert(get_maio_elem_order(__compound_head(page, 0)) == 0);
@@ -1872,7 +1890,7 @@ static inline ssize_t maio_map_page(struct file *file, const char __user *buf,
 	kfree(kbuff);
 
 	if (!(mtt = kzalloc(sizeof(struct umem_region_mtt)
-				+ (len * sizeof(struct page*)), GFP_KERNEL)))
+				+ (len * sizeof(struct maio_page_map)), GFP_KERNEL)))
 		return -ENOMEM;
 
 	mtt->start	= base;
@@ -1899,7 +1917,7 @@ static inline ssize_t maio_map_page(struct file *file, const char __user *buf,
 			Set pages into buffers. Magazine.
 
 		*/
-		mtt->pages[i] =	umem_pages[0];
+		mtt->mapped_pages[i].page =	umem_pages[0];
 		if (i != uaddr2idx(mtt, uaddr))
 			pr_err("Please Fix uaddr2idx: %ld != %llx\n", i, uaddr2idx(mtt, uaddr));
 		if (uaddr2addr(uaddr) != page_address(umem_pages[0]))
@@ -1908,6 +1926,7 @@ static inline ssize_t maio_map_page(struct file *file, const char __user *buf,
 
 		assert(!(uaddr & HUGE_OFFSET));
 		set_maio_uaddr(umem_pages[0], uaddr);
+		set_maio_uarg(umem_pages[0], mtt->mapped_pages[i].ubufs);
 
 	}
 	pr_err("%d: %s maio_maped U[%llx-%llx) K:[%llx-%llx)\n", smp_processor_id(), __FUNCTION__,

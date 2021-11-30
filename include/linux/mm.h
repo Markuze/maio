@@ -851,6 +851,17 @@ static inline u64 get_maio_uaddr(struct page *page)
 	return page[1].uaddr;
 }
 
+static inline void set_maio_uarg(struct page *page, void *uarg)
+{
+	page[1].uarg = uarg;
+}
+
+static inline void *get_maio_uarg(struct page *page)
+{
+	page = __compound_head(page, 0);
+	return page[1].uarg;
+}
+
 static inline void set_maio_elem_order(struct page *page, unsigned int order)
 {
 	page[1].elem_order = order;

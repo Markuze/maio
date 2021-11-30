@@ -74,15 +74,11 @@ struct user_matrix {
 	u64 entries[0] ____cacheline_aligned_in_smp;
 };
 
-/*****************************************************************************/
-struct io_track {
-	u64	map[512]; //4K
-};
-
 /******************************************************************************/
-struct maio_cached_buffer {
-	char headroom[256];
-	struct list_head list;
+
+struct maio_page_map {
+	struct page *page;
+	void *ubufs[PAGES_IN_HUGE];
 };
 
 struct umem_region_mtt {
@@ -91,7 +87,7 @@ struct umem_region_mtt {
 	u64 end;	/* userland end region   ]*/
 	int len;	/* Number of HP */
 	int order;	/* Not realy needed as HUGE_ORDER is defined today */
-	struct page *pages[0];
+	struct maio_page_map mapped_pages[0];
 };
 
 struct maio_magz {
