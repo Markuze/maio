@@ -89,6 +89,8 @@ static char* err_stat_names[] = {
 #define MAIO_ERR_TX_COMP_TRANS	0x4000
 	"TX Dev Busy			",
 #define MAIO_ERR_TX_BUSY	0x8000
+	"TX Add Frag Err		",
+#define MAIO_ERR_TX_FRAG_ERR	0x10000
 };
 
 #define NR_MAIO_ERR_STATS	(sizeof(err_stat_names)/sizeof(char *))
@@ -113,6 +115,7 @@ struct io_md {
 		};
 	};
 
+	u64	next_frag;	//User addr
 	union {
 		u64	user_bits2;
 		struct {
