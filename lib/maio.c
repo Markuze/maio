@@ -94,6 +94,8 @@ DEFINE_PER_CPU(struct percpu_maio_dev_qp, maio_dev_qp);
 static struct rb_root mtt_tree = RB_ROOT;
 static struct umem_region_mtt *cached_mtt;
 
+static DEFINE_PER_CPU(struct page_frag_cache, tx_page_frag);
+
 #ifdef MAIO_ASYNC_TX
 static int maio_post_tx_task(void *);
 static int (*threadfn)(void *data) = maio_post_tx_task;
@@ -991,11 +993,6 @@ int maio_xmit(struct net_device *dev, struct sk_buff **skb, int cnt)
 
 	for ( i = 0; i < cnt; i++) {
 
-		if (unlikely(page_ref_count(virt_to_page(skb[i]->data)) < 2)) {
-			pr_err("This shit cant happen\n");
-			dump_io_md(virt2io_md(skb[i]->data), "MD");
-			inc_err(MAIO_ERR_BAD_RC);
-		}
 		err = netdev_start_xmit(skb[i], dev, txq, --more);
 		if (!dev_xmit_complete(err)) {
 			inc_err(MAIO_ERR_TX_ERR_NETDEV);
@@ -1025,6 +1022,42 @@ static inline void advance_tx_ring(struct maio_tx_thread *tx_thread)
 	u16 idx = tx_thread->tx_counter & (tx_thread->tx_sz -1);
 	tx_thread->tx_ring[idx] = (tx_thread->tx_ring[idx] & (~0x1));
 	++tx_thread->tx_counter;
+}
+
+#define MAIO_TX_SKB_SIZE	64
+static inline struct sk_buff *maio_alloc_skb(struct net_device *netdev)
+{
+	struct page_frag_cache *nc;
+	struct sk_buff *skb;
+	bool pfmemalloc;
+	unsigned int len;
+	void *data;
+	gfp_t	gfp_mask = GFP_KERNEL;
+
+	len = SKB_DATA_ALIGN(MAIO_TX_SKB_SIZE + sizeof(struct skb_shared_info));
+
+	if (sk_memalloc_socks())
+		gfp_mask |= __GFP_MEMALLOC;
+
+	nc = this_cpu_ptr(&tx_page_frag);
+	data = page_frag_alloc(nc, len, gfp_mask);
+	pfmemalloc = nc->pfmemalloc;
+
+	if (unlikely(!data))
+		return NULL;
+
+	skb = __build_skb(data, len);
+	if (unlikely(!skb)) {
+		skb_free_frag(data);
+		return NULL;
+	}
+
+	if (pfmemalloc)
+		skb->pfmemalloc = 1;
+	skb->head_frag = 1;
+	skb->dev = netdev;
+
+	return skb;
 }
 
 struct sk_buff *maio_build_linear_rx_skb(struct net_device *netdev, void *va, size_t size)
@@ -1073,7 +1106,6 @@ static void maio_zc_tx_callback(struct ubuf_info *ubuf, bool zc_success)
 {
 	struct io_md *md = ubuf->ctx;
 	int in_transit = 1;
-
 
 	if (refcount_dec_and_test(&ubuf->refcnt)) {
 		__set_page_state(md, MAIO_PAGE_USER, __LINE__);
@@ -1313,6 +1345,48 @@ static inline void maio_free_skb_batch(struct sk_buff **skb, int cnt)
 	}
 }
 
+#define __min(a, b) ((a) < (b) ? (a) : (b))
+static inline int skb_add_frags(struct sk_buff *skb, char *kaddr)
+{
+	struct io_md *md = virt2io_md(kaddr);
+	int len = __min(MAIO_TX_SKB_SIZE, md->len);
+	int nr_frags = 0;
+
+	memcpy(skb->data, kaddr, len);
+	skb_put(skb, len);
+
+	if (unlikely(md->len > MAIO_TX_SKB_SIZE)) {
+		kaddr 	+= MAIO_TX_SKB_SIZE;
+		md->len -= MAIO_TX_SKB_SIZE;
+	 } else
+		kaddr = (md->next_frag) ? uaddr2addr(md->next_frag) : NULL;
+
+	while (kaddr) {
+		struct page *page = virt_to_page(kaddr);
+		size_t offset = ((u64)kaddr & (~PAGE_MASK));
+
+		if (unlikely(nr_frags >= MAX_SKB_FRAGS)) {
+			pr_err("Packet exceed the number of skb frags(%lu)\n",
+			       MAX_SKB_FRAGS);
+			return -EFAULT;
+		}
+
+		get_page(page);
+		md = virt2io_md(kaddr);
+
+		skb_fill_page_desc(skb, nr_frags, page, offset, md->len);
+		skb->data_len += md->len;
+		skb->truesize += md->len;
+		skb->len += md->len;
+		++nr_frags;
+
+		kaddr = (md->next_frag) ? uaddr2addr(md->next_frag) : NULL;
+	};
+	//skb->ip_summed = CHECKSUM_PARTIAL;
+
+	return 0;
+}
+
 #define TX_BATCH_SIZE	32
 int maio_post_tx_page(void *state)
 {
@@ -1338,10 +1412,17 @@ int maio_post_tx_page(void *state)
 			continue;
 		}
 
-		skb = maio_build_linear_tx_skb(tx_thread->netdev, kaddr, md->len);
+		skb = maio_alloc_skb(tx_thread->netdev); //kaddr, md->len);
 		if (unlikely(!skb)) {
 			pr_err("%s) Failed to alloc skb\n", __FUNCTION__);
 			inc_err(MAIO_ERR_TX_ERR);
+			advance_tx_ring(tx_thread);
+			continue;
+		}
+
+		if (skb_add_frags(skb, kaddr)) {
+			pr_err("%s) Failed to add frags\n", __FUNCTION__);
+			inc_err(MAIO_ERR_TX_FRAG_ERR);
 			advance_tx_ring(tx_thread);
 			continue;
 		}
@@ -1351,7 +1432,6 @@ int maio_post_tx_page(void *state)
 
 		if (likely(maio_set_comp_handler(skb, md))) {
 			skb_batch[cnt++] = skb;
-			get_page(page);
 			set_page_state(page, MAIO_PAGE_TX);
 			inc_err(MAIO_ERR_TX_START);
 		} else {
