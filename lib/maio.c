@@ -1579,6 +1579,7 @@ static inline size_t __maio_change_state(size_t val, size_t dev_idx)
 	if (val == 0 || val == 1) {
 		struct net_device *dev, *iter_dev;
 		struct list_head *iter;
+		const struct net_device_ops *ops;
 
 		if ( !(dev = dev_get_by_index(&init_net, dev_idx)))
 			return -ENODEV;
@@ -1590,6 +1591,13 @@ static inline size_t __maio_change_state(size_t val, size_t dev_idx)
 
 		netdev_for_each_lower_dev(dev, iter_dev, iter) {
 			maio_dev_configured[iter_dev->ifindex] = val;
+			ops = iter_dev->netdev_ops;
+
+			pr_err("%s: Flushing mem from [%d] %s (%s)\n", __FUNCTION__, iter_dev->ifindex, iter_dev->name, ops->ndo_dev_reset ? "Flush" : "NOP");
+
+			if (ops->ndo_dev_reset) {
+				ops->ndo_dev_reset(dev);
+			}
 		}
 	} else
 		return -EINVAL;
@@ -1921,11 +1929,12 @@ static inline void maio_stop(void)
 			trace_printk("stopping task %s [%d]\n", task_comm, rc);
 		}
 #endif
-
+/*
 		pr_err("Fluishing mem from [%d:%d] %s (%s)\n", i, dev->ifindex, dev->name, ops->ndo_dev_reset ? "Flush" : "NOP");
 		if (ops->ndo_dev_reset) {
 			ops->ndo_dev_reset(dev);
 		}
+*/
 	}
 
 	//magazine empty
