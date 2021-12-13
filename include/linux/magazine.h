@@ -6,11 +6,8 @@
 #include <linux/types.h>
 
 #define MAG_COUNT	2
-#define MAG_DEPTH	4//TODO: Make an init time variable
+#define MAG_DEPTH	128//TODO: Make an init time variable
 
-//TODO:
-//	1) Percpu
-//	2) use list instead of array.
 //
 struct magazine {
 	struct list_head 	list;
