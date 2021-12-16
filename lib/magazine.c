@@ -2,6 +2,7 @@
 #include <linux/slab.h>
 #include <linux/mm.h>
 #include <linux/magazine.h>
+#include <linux/seq_file.h>
 
 #ifndef assert
 #define assert(expr) 	do { \
@@ -18,6 +19,33 @@
 #endif
 
 #define CACHE_MASK      (BIT(INTERNODE_CACHE_SHIFT) - 1)
+
+static struct mag_stats 	mag_stats;
+
+static inline void inc_mag_stat(u8 idx)
+{
+	if (likely(idx < NR_MAGAZINE_STATS))
+		atomic_long_inc(&mag_stats.array[idx]);
+}
+
+#define put_line(m, fmt, ...)				\
+	if (m) {					\
+		seq_printf(m, fmt, ##__VA_ARGS__);	\
+	} else {					\
+		pr_err(fmt, ##__VA_ARGS__);		\
+	}
+
+void dump_mag_stats(struct seq_file *m, struct mag_allocator *allocator)
+{
+	int i = 0;
+
+	for (i = 0; i < NR_MAGAZINE_STATS; i++)
+			put_line(m, "%s\t: %ld\n", mag_stat_names[i],
+					atomic_long_read(&mag_stats.array[i]));
+
+	put_line(m, "Full count\t%d\n", allocator->full_count);
+	put_line(m, "Empty count\t%d\n", allocator->empty_count);
+}
 
 // page_to_nid - validate copy and mag alloc/free.
 
@@ -36,19 +64,18 @@ static inline u32 mag_pair_count(struct mag_pair *pair)
 	return pair->count[0] + pair->count[1];
 }
 
-static inline struct mag_pair *get_cpu_mag_pair(struct mag_allocator *allocator)
+static inline struct mag_pair *get_cpu_mag_pair(struct mag_allocator *allocator, int *idx)
 {
 	struct percpu_mag_pair *pcp;
-	int idx;
 
-	idx = ((in_softirq()) ? 1 : 0);
+	*idx = ((in_softirq()) ? 1 : 0);
 	get_cpu();
 
 	pcp = this_cpu_ptr(allocator->pcp_pair);
-	return &pcp->pair[idx];
+	return &pcp->pair[*idx];
 }
 
-static inline void put_cpu_mag_pair(unsigned long flags)
+static inline void put_cpu_mag_pair(void)
 {
 	put_cpu();
 }
@@ -96,12 +123,10 @@ static void mag_pair_free(struct mag_pair *pair, void *elem)
 
 static void mag_allocator_switch_full(struct mag_allocator *allocator, struct mag_pair *pair)
 {
-	unsigned long flags;
 	u32 idx = (pair->count[1] == MAG_DEPTH) ? 1 : 0;
 	assert(pair->count[idx] == MAG_DEPTH);
 
-	//mag_lock(allocator);
-	spin_lock_irqsave(&allocator->lock, flags);
+	mag_lock(allocator);
 
 	list_add(&pair->mags[idx]->list, &allocator->full_list);
 	++allocator->full_count;
@@ -115,19 +140,16 @@ static void mag_allocator_switch_full(struct mag_allocator *allocator, struct ma
 
 		pair->mags[idx]	= (void *)ALIGN((u64)ptr, L1_CACHE_BYTES);
 	}
-	spin_unlock_irqrestore(&allocator->lock, flags);
-	//mag_unlock(allocator);
+	mag_unlock(allocator);
 
 	pair->count[idx] = 0;
 }
 
 static void mag_allocator_switch_empty(struct mag_allocator *allocator, struct mag_pair *pair)
 {
-	unsigned long flags;
 	int idx = (pair->count[0]) ? 1 : 0;
 
-	//mag_lock(allocator);
-	spin_lock_irqsave(&allocator->lock, flags);
+	mag_lock(allocator);
 	if (allocator->full_count) {
 		list_add(&pair->mags[idx]->list, &allocator->empty_list);
 		++allocator->empty_count;
@@ -137,8 +159,7 @@ static void mag_allocator_switch_empty(struct mag_allocator *allocator, struct m
 		pair->count[idx] = MAG_DEPTH;
 		--allocator->full_count;
 	}
-	//mag_unlock(allocator);
-	spin_unlock_irqrestore(&allocator->lock, flags);
+	mag_unlock(allocator);
 }
 
 void *mag_alloc_elem_on_cpu(struct mag_allocator *allocator, int cpu)
@@ -157,32 +178,37 @@ void *mag_alloc_elem_on_cpu(struct mag_allocator *allocator, int cpu)
 
 void *mag_alloc_elem(struct mag_allocator *allocator)
 {
-	struct mag_pair	*pair = get_cpu_mag_pair(allocator);
+	int in_bh;
+	struct mag_pair	*pair = get_cpu_mag_pair(allocator, &in_bh);
 	void 		*elem;
 
+	inc_mag_stat(MAG_ALLOC_TASK + in_bh);
 	if (unlikely(mag_pair_count(pair) == 0 )) {
 		/*may fail, it's ok.*/
-		TRACE_DEBUG("MAG: %s| pair %p [%d:%d] :: %d", __FUNCTION__, pair, smp_processor_id(), in_softirq() ? 1 : 0, mag_pair_count(pair));
+		inc_mag_stat(MAG_SWAP_EMPTY + in_bh);
 		mag_allocator_switch_empty(allocator, pair);
 	}
 
 	elem = mag_pair_alloc(pair);
-	put_cpu_mag_pair(flags);
+	put_cpu_mag_pair();
 	return elem;
 }
 
 void mag_free_elem(struct mag_allocator *allocator, void *elem)
 {
-	struct mag_pair	*pair = get_cpu_mag_pair(allocator);
+	int in_bh;
+	struct mag_pair	*pair = get_cpu_mag_pair(allocator, &in_bh);
 
+
+	inc_mag_stat(MAG_FREE_TASK + in_bh);
 	mag_pair_free(pair, elem);
 
 	/* If both mags are full */
 	if (unlikely(mag_pair_count(pair) == (MAG_DEPTH << 1))) {
-		TRACE_DEBUG("MAG: %s| pair %p [%d:%d] :: %d", __FUNCTION__, pair, smp_processor_id(), in_softirq() ? 1 : 0, mag_pair_count(pair));
+		inc_mag_stat(MAG_SWAP_FULL + in_bh);
 		mag_allocator_switch_full(allocator, pair);
 	}
-	put_cpu_mag_pair(flags);
+	put_cpu_mag_pair();
 }
 
 /*Allocating a new pair of empty magazines*/

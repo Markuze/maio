@@ -52,4 +52,33 @@ void mag_allocator_init(struct mag_allocator *allocator);
 
 //Need free and GC
 
+/******** MAGAZINE STATE COUNTERS ****************/
+static char* mag_stat_names[] = {
+	"alloc in task				",
+#define MAG_ALLOC_TASK				0x0
+	"alloc in soft_bh			",
+#define MAG_ALLOC_SOFT_BH			0x1
+	"free in task				",
+#define MAG_FREE_TASK				0x2
+	"free in soft_bh			",
+#define MAG_FREE_SOFT_BH			0x3
+/* WARNING: the numbers of the first four elemnts must not change */
+	"swap empty				",
+#define MAG_SWAP_EMPTY				0x4
+	"swap empty bh				",
+#define MAG_SWAP_EMPTY_BH			0x5
+	"swap full				",
+#define MAG_SWAP_FULL				0x6
+	"swap full bh				",
+#define MAG_SWAP_FULL_BH			0x7
+};
+
+#define NR_MAGAZINE_STATS	(sizeof(mag_stat_names)/sizeof(char *))
+
+struct mag_stats {
+	atomic64_t	array[NR_MAGAZINE_STATS];
+};
+
+void dump_mag_stats(struct seq_file *m, struct mag_allocator *allocator);
+
 #endif //__MAGAZINE__H
