@@ -21,8 +21,7 @@
 						   #expr, __FILE__, __func__, __LINE__); 	\
 					pr_alert("Assertion failed! %s, %s, %s, line %d\n", 	\
 						   #expr, __FILE__, __func__, __LINE__); 	\
-					dump_memory_stats(NULL);				\
-					dump_err_stats(NULL);					\
+					dump_all_stats(NULL);					\
 					panic("ASSERT FAILED: %s (%s)", __FUNCTION__, #expr); 	\
 				} \
 			} while (0)
@@ -173,7 +172,13 @@ static void dump_memory_stats(struct seq_file *m)
 			pr_err("%s\t: %ld\n", maio_stat_names[i],
 					atomic_long_read(&memory_stats.array[i]));
 		}
+}
 
+static inline void dump_all_stats(struct seq_file *m)
+{
+	dump_memory_stats(m);
+	dump_err_stats(m);
+	dump_mag_stats(m, &global_maio.mag[0]);
 }
 
 static inline void dec_state(u64 state)
@@ -265,8 +270,7 @@ static inline void	dump_page_state(struct page *page)
 		__builtin_return_address(0),
 		md->in_transit, md->in_transit_dbg, md->tx_cnt, md->tx_compl);
 
-	dump_memory_stats(NULL);
-	dump_err_stats(NULL);
+	dump_all_stats(NULL);
 }
 
 
@@ -536,8 +540,7 @@ struct page *__maio_alloc_pages(size_t order)
 			buffer = mag_alloc_elem(&global_maio.mag[order2idx(order)]);
 		*/
 		pr_err("Failed to alloc from MAIO mag [%ps]\n", __builtin_return_address(0));
-		dump_memory_stats(NULL);
-		dump_err_stats(NULL);
+		dump_all_stats(NULL);
 		panic("WTF?!?!");
 		return NULL;
 	}
@@ -1876,8 +1879,7 @@ static inline ssize_t maio_add_pages_0(struct file *file, const char __user *buf
 	}
 	kfree(kbuff);
 
-	dump_memory_stats(NULL);
-	dump_err_stats(NULL);
+	dump_all_stats(NULL);
 	return 0;
 }
 
@@ -2092,8 +2094,7 @@ static int maio_map_show(struct seq_file *m, void *v)
 {
 	/* TODO: make usefull */
 	if (global_maio_matrix[last_dev_idx]) {
-		dump_memory_stats(m);
-		dump_err_stats(m);
+		dump_all_stats(m);
 	} else {
 		seq_printf(m, "NOT CONFIGURED\n");
 	}
