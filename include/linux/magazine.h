@@ -6,7 +6,7 @@
 #include <linux/types.h>
 
 #define MAG_COUNT	2
-#define MAG_DEPTH	128//TODO: Make an init time variable
+#define MAG_DEPTH	64//TODO: Make an init time variable
 
 //
 struct magazine {

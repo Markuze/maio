@@ -19,7 +19,8 @@
 #endif
 
 #define CACHE_MASK      (BIT(INTERNODE_CACHE_SHIFT) - 1)
-
+//TODO: MAG_DEPTH can be a property of a mag_pair - allow in task to return earlier
+//(watch out for get full) -- mag count needs to be property of magazine
 static struct mag_stats 	mag_stats;
 
 static inline void inc_mag_stat(u8 idx)

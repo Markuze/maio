@@ -1594,6 +1594,7 @@ static inline size_t __maio_change_state(size_t val, size_t dev_idx)
 
 		netdev_for_each_lower_dev(dev, iter_dev, iter) {
 			maio_dev_configured[iter_dev->ifindex] = val;
+#ifdef FLUSH_ON_STATE_CHANGE
 			ops = iter_dev->netdev_ops;
 
 			pr_err("%s: Flushing mem from [%d] %s (%s)\n", __FUNCTION__, iter_dev->ifindex, iter_dev->name, ops->ndo_dev_reset ? "Flush" : "NOP");
@@ -1601,6 +1602,7 @@ static inline size_t __maio_change_state(size_t val, size_t dev_idx)
 			if (ops->ndo_dev_reset) {
 				ops->ndo_dev_reset(dev);
 			}
+#endif
 		}
 	} else
 		return -EINVAL;
@@ -1931,12 +1933,12 @@ static inline void maio_stop(void)
 			trace_printk("stopping task %s [%d]\n", task_comm, rc);
 		}
 #endif
-/*
+#ifndef FLUSH_ON_STATE_CHANGE
 		pr_err("Fluishing mem from [%d:%d] %s (%s)\n", i, dev->ifindex, dev->name, ops->ndo_dev_reset ? "Flush" : "NOP");
 		if (ops->ndo_dev_reset) {
 			ops->ndo_dev_reset(dev);
 		}
-*/
+#endif
 	}
 
 	//magazine empty
