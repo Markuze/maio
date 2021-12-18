@@ -854,7 +854,13 @@ int netvsc_recv_callback(struct net_device *net,
 		return NVSP_STAT_FAIL;
 
 	if (netvsc_run_maio(net, nvchan)) {
-                return NVSP_STAT_SUCCESS; /* page/packet was consumed by MAIO */
+		/* page/packet was consumed by MAIO copy */
+		/*
+		 * This copy is needed here since the memory pointed by
+		 * hv_netvsc_packet cannot be deallocated.
+		 * We can as well report a SUCCESS
+		 */
+                return NVSP_STAT_SUCCESS;
 	}
 
 	/* Allocate a skb - TODO direct I/O to pages? */

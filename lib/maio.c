@@ -847,12 +847,18 @@ static inline int __maio_post_rx_page(struct net_device *netdev, struct page *pa
 		return 0;
 	}
 
-	if (unlikely(prep_rx_ring_entry(qp)))
-		return 0;
+	if (unlikely(prep_rx_ring_entry(qp))) {
+		if (page) {
+			/* its a MAIO page and we consume it */
+			set_page_state(page, MAIO_PAGE_CONSUMED);
+			put_page(page);
+		}
+		return 1;
+	}
 
 	trace_debug("kaddr %llx, len %d\n", (u64)addr, len);
 
-#define HP_CACHE_LIM 16
+#define HP_CACHE_LIM 64
 	if (unlikely(head_cache_size > HP_CACHE_LIM)) {
 		if (page) {
 			inc_err(MAIO_ERR_HEAD_RETURNED);
@@ -1000,9 +1006,9 @@ int maio_xmit(struct net_device *dev, struct sk_buff **skb, int cnt)
 		if (!dev_xmit_complete(err)) {
 			inc_err(MAIO_ERR_TX_ERR_NETDEV);
 			consume_skb(skb[i]);
-			//kfree_skb(skb);
 		}
 	}
+	err = 0;
 
 unlock:
         HARD_TX_UNLOCK(dev, txq);
@@ -1449,8 +1455,8 @@ int maio_post_tx_page(void *state)
 	}
 
 	trace_debug("%d: Sending %d buffers. counter %lu\n", smp_processor_id(), cnt, tx_thread->tx_counter);
-	if (cnt)
-		if ((rc = maio_xmit(tx_thread->netdev, skb_batch, cnt)))
+	if (likely(cnt))
+		if (unlikely(rc = maio_xmit(tx_thread->netdev, skb_batch, cnt)))
 			maio_free_skb_batch(skb_batch, cnt);
 
 	return cnt;
