@@ -561,6 +561,7 @@ struct page *__maio_alloc_pages(size_t order)
 				trace_printk("%d:%s:%llx :%s\n", smp_processor_id(), __FUNCTION__, (u64)page, PageHead(page)?"HEAD":"");
 				trace_printk("%d:%s:%llx[%d]%llx\n", smp_processor_id(),
 						__FUNCTION__, (u64)page, page_ref_count(page), (u64)page_address(page));
+				dump_page_state(page);
 				panic("P %llx: %llx  has %d refcnt\n", (u64)page, (u64)page_address(page), page_ref_count(page));
 			}
 		}
@@ -2110,7 +2111,7 @@ static int maio_map_show(struct seq_file *m, void *v)
         return 0;
 }
 
-#define MAIO_VERSION	"v0.98-memory-stats"
+#define MAIO_VERSION	"v1.0-performance"
 static int maio_version_show(struct seq_file *m, void *v)
 {
 	seq_printf(m, "%s\n", MAIO_VERSION);

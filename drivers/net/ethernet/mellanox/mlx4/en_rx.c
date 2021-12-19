@@ -190,7 +190,7 @@ static int mlx4_en_prepare_rx_desc(struct mlx4_en_priv *priv,
 		if (unlikely(is_maio_page(frags->page))) {
 			struct page *page = frags->page;
 			trace_printk("[%s]ERROR: Page %llx state %llx uaddr %llx\n", __FUNCTION__, (u64)page, get_page_state(page), get_maio_uaddr(page));
-			set_page_state(frags->page, MAIO_PAGE_RX);
+			//set_page_state(frags->page, MAIO_PAGE_RX);
 			frags->page_offset = maio_get_page_headroom(NULL);
 		} else {
 			frags->page_offset = XDP_PACKET_HEADROOM;
