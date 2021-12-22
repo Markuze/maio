@@ -75,21 +75,6 @@ struct user_matrix {
 };
 
 /******************************************************************************/
-
-struct maio_page_map {
-	struct page *page;
-	void *ubufs[PAGES_IN_HUGE];
-};
-
-struct umem_region_mtt {
-	struct rb_node node;
-	u64 start;	/* userland start region [*/
-	u64 end;	/* userland end region   ]*/
-	int len;	/* Number of HP */
-	int order;	/* Not realy needed as HUGE_ORDER is defined today */
-	struct maio_page_map mapped_pages[0];
-};
-
 struct maio_magz {
 	struct mag_allocator 	mag[NUM_MAIO_SIZES];
 	u32			num_pages;

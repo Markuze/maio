@@ -134,14 +134,32 @@ struct io_md {
 #define IO_MD_OFF      (PAGE_SIZE - SKB_DATA_ALIGN(sizeof(struct io_md)))
 #define SHADOW_OFF     (IO_MD_OFF - SKB_DATA_ALIGN(sizeof(struct skb_shared_info)) \
                                        - SKB_DATA_ALIGN(sizeof(struct io_md)))
+struct page_priv_ctx {
+	struct ubuf_info	ubuf[PAGES_IN_HUGE];
+};
+
+struct maio_page_map {
+	struct page *page;
+	struct  page_priv_ctx *priv;
+};
+
+struct umem_region_mtt {
+	struct rb_node node;
+	u64 start;	/* userland start region [*/
+	u64 end;	/* userland end region   ]*/
+	int len;	/* Number of HP */
+	int order;	/* Not realy needed as HUGE_ORDER is defined today */
+	struct maio_page_map mapped_pages[0];
+};
+
+struct misc_data {
+	struct list_head	list;
+	void *ctx;
+};
 
 struct skb_inline_data {
 	union {
 		u8	data[SMP_CACHE_BYTES];
-		struct {
-			struct list_head	list;
-			void *ctx;
-		};
 	};
 	struct skb_shared_info shinfo ____cacheline_aligned_in_smp;
 };
