@@ -1,5 +1,4 @@
 #include <linux/init.h>
-
 #include <linux/magazine.h>
 #include <linux/mm.h>
 #include <linux/slab.h>
@@ -251,7 +250,23 @@ static inline u64 get_page_state(struct page *page)
 	return md->state;
 }
 
-static inline void	dump_page_state(struct page *page)
+static inline void trace_page_state(struct page *page)
+{
+	struct io_md *md = page2io_md(page);
+
+	trace_printk("ERROR: Page %llx state %llx uaddr %llx\n", (u64)page, get_page_state(page), get_maio_uaddr(page));
+	trace_printk("%d:%s:%llx :%s\n", smp_processor_id(), __FUNCTION__, (u64)page, PageHead(page)?"HEAD":"");
+	trace_printk("%ps] page %llx(state %llx [%u]<%llx>[%u] )[%d] addr %llx\n"
+		"%ps] transit %d transitcnt %u [%d/%d]\n",
+		__builtin_return_address(0),
+		(u64)page, get_page_state(page), md->line,
+		md->prev_state, md->prev_line, page_ref_count(page), (u64)page_address(page),
+		__builtin_return_address(0),
+		md->in_transit, md->in_transit_dbg, md->tx_cnt, md->tx_compl);
+
+}
+
+static inline void dump_page_state(struct page *page)
 {
 	struct io_md *md = page2io_md(page);
 
@@ -1110,7 +1125,11 @@ struct sk_buff *maio_build_linear_tx_skb(struct net_device *netdev, void *va, si
 static void maio_zc_tx_callback(struct ubuf_info *ubuf, bool zc_success)
 {
 	struct io_md *md = ubuf->ctx;
+	struct page *page = virt_to_page(md);
 	int in_transit = 1;
+
+	assert(get_maio_uaddr(page));
+	assert(get_page_state(page) == MAIO_PAGE_TX);
 
 	if (refcount_dec_and_test(&ubuf->refcnt)) {
 		__set_page_state(md, MAIO_PAGE_USER, __LINE__);
@@ -1123,8 +1142,9 @@ static void maio_zc_tx_callback(struct ubuf_info *ubuf, bool zc_success)
 	last_comp = addr2uaddr(md);
 	md->in_transit = in_transit;
 	md->in_transit_dbg++;
-	trace_debug("%s: TX in_transit %s [%d]<%d>\n", __FUNCTION__,
-			in_transit ? "YES": "NO", refcount_read(&ubuf->refcnt), md->in_transit_dbg);
+	//trace_printk("%s: %llx TX in_transit %s [%d]<%d>\n", __FUNCTION__, (u64)ubuf,
+	//		in_transit ? "YES": "NO", refcount_read(&ubuf->refcnt), md->in_transit_dbg);
+	//trace_page_state(page);
 }
 
 # if 0
@@ -1200,9 +1220,11 @@ static inline int maio_set_comp_handler(struct sk_buff *skb, struct io_md *md)
 	uarg->ctx 		= md;
 	refcount_inc(&uarg->refcnt);
 
-	//trace_printk("%s: TX in_transit %s [%d]\n", __FUNCTION__,
-	//		md->in_transit ? "YES": "NO", refcount_read(&md->uarg.refcnt));
-
+# if 0
+	trace_printk("%s: %llx TX in_transit %s [%d]\n", __FUNCTION__, (u64)uarg,
+			md->in_transit ? "YES": "NO", refcount_read(&uarg->refcnt));
+	trace_page_state(page);
+#endif
 	skb_shinfo(skb)->tx_flags |= SKBTX_DEV_ZEROCOPY;
 	skb_shinfo(skb)->destructor_arg = uarg;
 	return 1;
@@ -1573,7 +1595,7 @@ static inline size_t __maio_change_state(size_t val, size_t dev_idx)
 	if (val == 0 || val == 1) {
 		struct net_device *dev, *iter_dev;
 		struct list_head *iter;
-		const struct net_device_ops *ops;
+		//const struct net_device_ops *ops;
 
 		if ( !(dev = dev_get_by_index(&init_net, dev_idx)))
 			return -ENODEV;
@@ -2033,7 +2055,7 @@ static inline ssize_t maio_map_page(struct file *file, const char __user *buf,
 */
 	return size;
 mem_err:
-	pr_err("Failed to allocate MTT mameory (%p, %d)\n", mtt, i);
+	pr_err("Failed to allocate MTT mameory (%p, %ld)\n", mtt, i);
 	if (mtt) {
 		while (i) {
 			kfree(mtt->mapped_pages[i].priv);
