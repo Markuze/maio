@@ -1129,7 +1129,7 @@ static void maio_zc_tx_callback(struct ubuf_info *ubuf, bool zc_success)
 	int in_transit = 1;
 
 	assert(get_maio_uaddr(page));
-	assert(get_page_state(page) == MAIO_PAGE_TX);
+	assert(get_page_state(page) & (MAIO_PAGE_TX|MAIO_PAGE_NAPI));
 
 	if (refcount_dec_and_test(&ubuf->refcnt)) {
 		__set_page_state(md, MAIO_PAGE_USER, __LINE__);
@@ -1382,7 +1382,7 @@ static inline int skb_add_frags(struct sk_buff *skb, char *kaddr)
 		size_t offset = ((u64)kaddr & (~PAGE_MASK));
 
 		if (unlikely(nr_frags >= MAX_SKB_FRAGS)) {
-			pr_err("Packet exceed the number of skb frags(%lu)\n",
+			pr_err("Packet exceeds the number of skb frags(%lu)\n",
 			       MAX_SKB_FRAGS);
 			return -EFAULT;
 		}
