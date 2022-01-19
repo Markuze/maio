@@ -266,11 +266,11 @@ static inline void trace_page_state(struct page *page)
 
 }
 
-static inline void dump_page_state(struct page *page)
+static inline void __dump_page_state(struct page *page, int line)
 {
 	struct io_md *md = page2io_md(page);
 
-	pr_err("ERROR: Page %llx state %llx uaddr %llx\n", (u64)page, get_page_state(page), get_maio_uaddr(page));
+	pr_err("ERROR[%d]: Page %llx state %llx uaddr %llx\n", line, (u64)page, get_page_state(page), get_maio_uaddr(page));
 	pr_err("%d:%s:%llx :%s\n", smp_processor_id(), __FUNCTION__, (u64)page, PageHead(page)?"HEAD":"");
 	pr_err("%ps] page %llx(state %llx [%u]<%llx>[%u] )[%d] addr %llx\n"
 		"%ps] transit %d transitcnt %u [%d/%d]\n",
@@ -282,7 +282,7 @@ static inline void dump_page_state(struct page *page)
 
 	dump_all_stats(NULL);
 }
-
+#define dump_page_state(p)	__dump_page_state(p, __LINE__)
 
 
 static inline void flush_all_mtts(void)
@@ -455,8 +455,7 @@ static inline void __maio_free(struct page *page, void *addr)
 	assert(page_ref_count(page) == 0);
 
 	if (unlikely(! (get_page_state(page) & MAIO_PAGE_IO))) {
-		pr_err("ERROR: Page %llx state %llx uaddr %llx\n", (u64)page, get_page_state(page), get_maio_uaddr(page));
-		pr_err("%d:%s:%llx :%s\n", smp_processor_id(), __FUNCTION__, (u64)page_address(page), PageHead(page)?"HEAD":"Tail");
+		dump_page_state(page);
 		dump_io_md(virt2io_md(addr), "MD");
 		set_page_state(page, MAIO_PAGE_USER);
 		inc_err(MAIO_ERR_BAD_FREE_PAGE);
@@ -1129,12 +1128,17 @@ static void maio_zc_tx_callback(struct ubuf_info *ubuf, bool zc_success)
 	int in_transit = 1;
 
 	assert(get_maio_uaddr(page));
+	if (unlikely(!(get_page_state(page) & (MAIO_PAGE_TX|MAIO_PAGE_NAPI)))) {
+		dump_page_state(page);
+	}
 	assert(get_page_state(page) & (MAIO_PAGE_TX|MAIO_PAGE_NAPI));
 
 	if (refcount_dec_and_test(&ubuf->refcnt)) {
 		__set_page_state(md, MAIO_PAGE_USER, __LINE__);
 		inc_err(MAIO_ERR_TX_COMP);
 		in_transit = 0;
+		assert(atomic_long_read(err_stats.array[ffs(MAIO_ERR_TX_COMP >> 1)]) <=
+			atomic_long_read(err_stats.array[ffs(MAIO_ERR_TX_START >> 1)]));
 	} else {
 		inc_err(MAIO_ERR_TX_COMP_TRANS);
 	}
