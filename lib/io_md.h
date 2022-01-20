@@ -58,12 +58,12 @@ struct memory_stats {
 
 /******** MAIO STATE COUNTERS ****************/
 static char* err_stat_names[] = {
+	"TX Completion			",
+#define MAIO_ERR_TX_COMP	0x1
+	"NAPI Send			",
+#define MAIO_ERR_NAPI  		0x2
 	"TX Send			",
 #define MAIO_ERR_TX_START	0x4
-	"TX Completion			",
-#define MAIO_ERR_TX_COMP	0x2
-	"NAPI Send			",
-#define MAIO_ERR_NAPI  		0x1
 	"TX Error			",
 #define MAIO_ERR_TX_ERR		0x8
 	"NS packet			",

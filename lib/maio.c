@@ -1843,7 +1843,8 @@ static inline ssize_t init_user_rings(struct file *file, const char __user *buf,
 
 		tx_thread->dev_idx = dev_idx;
 		tx_thread->ring_id = i;
-		tx_thread->netdev = maio_devs[dev_idx];
+		tx_thread->netdev = maio_devs[dev_map.on_tx[dev_idx]];//maio_devs[dev_idx];
+		pr_err("tx_netdev for %d is %d\n", dev_idx, dev_map.on_tx[dev_idx]);
 #ifdef MAIO_ASYNC_TX
 		tx_thread->thread = kthread_create(threadfn, tx_thread, "maio_tx_%d_thread_%ld", dev_idx, i);
 		if (IS_ERR(tx_thread->thread)) {
