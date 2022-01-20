@@ -1137,8 +1137,8 @@ static void maio_zc_tx_callback(struct ubuf_info *ubuf, bool zc_success)
 		__set_page_state(md, MAIO_PAGE_USER, __LINE__);
 		inc_err(MAIO_ERR_TX_COMP);
 		in_transit = 0;
-		assert(atomic_long_read(err_stats.array[ffs(MAIO_ERR_TX_COMP >> 1)]) <=
-			atomic_long_read(err_stats.array[ffs(MAIO_ERR_TX_START >> 1)]));
+		assert(atomic_long_read(&err_stats.array[ffs(MAIO_ERR_TX_COMP >> 1)]) <=
+			atomic_long_read(&err_stats.array[ffs(MAIO_ERR_TX_START >> 1)]));
 	} else {
 		inc_err(MAIO_ERR_TX_COMP_TRANS);
 	}
