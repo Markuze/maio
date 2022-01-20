@@ -192,6 +192,14 @@ static inline void inc_state(u64 state)
 	}
 }
 
+static inline u64 get_err(u64 state)
+{
+	u8 idx = ffs(state >> 1);
+	if (idx > NR_MAIO_ERR_STATS)
+		pr_err("wtf?! %d (%llx)",idx,state);
+	return atomic_long_read(&err_stats.array[idx]);
+}
+
 static inline void inc_err(u64 state)
 {
 	u8 idx = ffs(state >> 1);
@@ -1137,8 +1145,7 @@ static void maio_zc_tx_callback(struct ubuf_info *ubuf, bool zc_success)
 		__set_page_state(md, MAIO_PAGE_USER, __LINE__);
 		inc_err(MAIO_ERR_TX_COMP);
 		in_transit = 0;
-		assert(atomic_long_read(&err_stats.array[ffs(MAIO_ERR_TX_COMP >> 1)]) <=
-			atomic_long_read(&err_stats.array[ffs(MAIO_ERR_TX_START >> 1)]));
+		assert(get_err(MAIO_ERR_TX_COMP) <= get_err(MAIO_ERR_TX_START));
 	} else {
 		inc_err(MAIO_ERR_TX_COMP_TRANS);
 	}
@@ -2136,7 +2143,7 @@ static int maio_map_show(struct seq_file *m, void *v)
         return 0;
 }
 
-#define MAIO_VERSION	"v1.0-performance"
+#define MAIO_VERSION	"v1.1-performance"
 static int maio_version_show(struct seq_file *m, void *v)
 {
 	seq_printf(m, "%s\n", MAIO_VERSION);
