@@ -208,13 +208,14 @@ static inline void inc_err(u64 state)
 	atomic_long_inc(&err_stats.array[idx]);
 }
 
-static inline struct io_md *kaddr2shadow_md(void *kaddr)
+static inline void *kaddr2shadow(void *kaddr)
 {
 	u64 shadow = (u64)kaddr;
 	shadow &= PAGE_MASK;
 	shadow += SHADOW_OFF;
 	return (void *)shadow;
 }
+#define page2shadow(p)	kaddr2shadow(page_address(p))
 
 static inline struct io_md* virt2io_md(void *va)
 {
@@ -240,7 +241,7 @@ static inline struct io_md* page2io_md(struct page *page)
 */
 }
 
-static inline void __set_page_state(struct io_md *md,u64 new_state, u32 line)
+static inline void __set_page_state(struct io_md *md,u64 new_state, u32 line, u8 rc)
 {
 	dec_state(md->state);
 	inc_state(new_state);
@@ -250,7 +251,7 @@ static inline void __set_page_state(struct io_md *md,u64 new_state, u32 line)
 	md->state = new_state;
 	md->line = line;
 }
-#define set_page_state(p,s)	__set_page_state(page2io_md(page),s, __LINE__)
+#define set_page_state(p,s)	__set_page_state(page2io_md(p),s, __LINE__, page_ref_count(p))
 
 static inline u64 get_page_state(struct page *page)
 {
@@ -274,9 +275,37 @@ static inline void trace_page_state(struct page *page)
 
 }
 
+char *dump_page_rc(struct page *page, char *buffer, size_t size)
+{
+	union shadow_state	*shadow = page2shadow(page);
+	struct io_md		*md = page2io_md(page);
+
+	u64 idx	= atomic_read(&md->idx);
+	int i, cntr = 0;
+
+	for (i = 0; i < 32; i++) {
+		int len;
+		idx = idx & 31;
+
+		if (!shadow->addr[idx])
+			continue;
+
+		len = snprintf(&buffer[cntr], size, "%-2d:%-2d:%-2d:%ps\n",
+				idx,
+				shadow->core[idx],
+				shadow->rc[idx],
+				(void *)shadow->addr[idx]);
+		size -= len;
+		cntr += len;
+		++idx;
+	}
+	return buffer;
+}
+
 static inline void __dump_page_state(struct page *page, int line)
 {
 	struct io_md *md = page2io_md(page);
+	char *page_rc;
 
 	pr_err("ERROR[%d]: Page %llx state %llx uaddr %llx\n", line, (u64)page, get_page_state(page), get_maio_uaddr(page));
 	pr_err("%d:%s:%llx :%s\n", smp_processor_id(), __FUNCTION__, (u64)page, PageHead(page)?"HEAD":"");
@@ -288,10 +317,11 @@ static inline void __dump_page_state(struct page *page, int line)
 		__builtin_return_address(0),
 		md->in_transit, md->in_transit_dbg, md->tx_cnt, md->tx_compl);
 
+	page_rc = dump_page_rc(page, page_address(alloc_pages((GFP_ATOMIC|__GFP_ZERO), 1)), (PAGE_SIZE << 1));
+	pr_err("%s\n", page_rc);
 	dump_all_stats(NULL);
 }
 #define dump_page_state(p)	__dump_page_state(p, __LINE__)
-
 
 static inline void flush_all_mtts(void)
 {
@@ -478,8 +508,8 @@ static inline void __maio_free(struct page *page, void *addr)
 #endif
 	}
 	if (unlikely(virt2io_md(addr)->state == MAIO_PAGE_TX)) {
-		pr_err("%s Zero refcount page %llx(state %llx)[%d] rc %d\n", __FUNCTION__,
-			(u64)page, get_page_state(page), page_ref_count(page),page_ref_count(page));
+		pr_err("%s Zero refcount page %llx(state %llx) rc %d\n", __FUNCTION__,
+			(u64)page, get_page_state(page), page_ref_count(page));
 		panic("Illegal page state! \n");
 	}
 	//trace_printk("should I be here? page %llx(state %llx)[%d] rc %d\n",
@@ -489,6 +519,20 @@ static inline void __maio_free(struct page *page, void *addr)
 	set_page_state(page, MAIO_PAGE_FREE);
 	put_buffers(addr, get_maio_elem_order(page));
 }
+
+void maio_trace_page_rc(struct page *page)
+{
+	union shadow_state	*shadow = page2shadow(page);
+	struct io_md		*md = page2io_md(page);
+
+	u64 idx	= atomic_inc_return(&md->idx);
+	idx = (idx -1) & 31;
+
+	shadow->core[idx]  	= smp_processor_id();
+	shadow->rc[idx]		= page_ref_count(page);
+	shadow->addr[idx]	=(u64)__builtin_return_address(1);
+}
+EXPORT_SYMBOL(maio_trace_page_rc);
 
 void maio_page_free(struct page *page)
 {
@@ -1142,7 +1186,7 @@ static void maio_zc_tx_callback(struct ubuf_info *ubuf, bool zc_success)
 	assert(get_page_state(page) & (MAIO_PAGE_TX|MAIO_PAGE_NAPI));
 
 	if (refcount_dec_and_test(&ubuf->refcnt)) {
-		__set_page_state(md, MAIO_PAGE_USER, __LINE__);
+		set_page_state(page, MAIO_PAGE_USER);
 		inc_err(MAIO_ERR_TX_COMP);
 		in_transit = 0;
 		assert(get_err(MAIO_ERR_TX_COMP) <= get_err(MAIO_ERR_TX_START));
@@ -1844,7 +1888,8 @@ static inline ssize_t init_user_rings(struct file *file, const char __user *buf,
 		tx_thread->dev_idx = dev_idx;
 		tx_thread->ring_id = i;
 		tx_thread->netdev = maio_devs[dev_map.on_tx[dev_idx]];//maio_devs[dev_idx];
-		pr_err("tx_netdev for %d is %d\n", dev_idx, dev_map.on_tx[dev_idx]);
+		//tx_thread->netdev = maio_devs[dev_idx];
+		pr_err("tx_netdev for %d is %s\n", dev_idx, tx_thread->netdev->name);
 #ifdef MAIO_ASYNC_TX
 		tx_thread->thread = kthread_create(threadfn, tx_thread, "maio_tx_%d_thread_%ld", dev_idx, i);
 		if (IS_ERR(tx_thread->thread)) {

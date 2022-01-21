@@ -4,8 +4,8 @@
 #include <linux/skbuff.h>
 
 /* Current mem layout
-	4K [64|128 |640   |512      |2KB  |256B 	    |320B       |128B		   ]
-	   [ dpdk  |vc_pkt| headroom| data| hole <shadow md>| skb_shinfo| io_md + ubuf_info]
+	4K [64|128 |640   |512      |2KB  |320B 	    |320B       |64	]
+	   [ dpdk  |vc_pkt| headroom| data| hole <shadow md>| skb_shinfo| io_md ]
 */
 /********* Caution: Should be same as user counterpart ************************/
 
@@ -128,12 +128,22 @@ struct io_md {
 	volatile u16 in_transit_dbg;
 	u32 line;
 	u64 prev_state;
+	atomic_t	idx;
 	u32 prev_line;
+} ____cacheline_aligned_in_smp;
+
+union shadow_state {
+	u8 __size[320];
+	struct {
+		u8 core[32];
+		u8 rc[32];
+		u64 addr[32];
+	};
 } ____cacheline_aligned_in_smp;
 
 #define IO_MD_OFF      (PAGE_SIZE - SKB_DATA_ALIGN(sizeof(struct io_md)))
 #define SHADOW_OFF     (IO_MD_OFF - SKB_DATA_ALIGN(sizeof(struct skb_shared_info)) \
-                                       - SKB_DATA_ALIGN(sizeof(struct io_md)))
+                                       - SKB_DATA_ALIGN(sizeof(union shadow_state)))
 struct page_priv_ctx {
 	struct ubuf_info	ubuf[PAGES_IN_HUGE];
 };
