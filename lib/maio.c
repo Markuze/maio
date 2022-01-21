@@ -1049,6 +1049,7 @@ EXPORT_SYMBOL(maio_post_rx_page);
 
 //TODO: Loop inside lock
 // use dev_direct_xmit / xsk_generic_xmit
+#define is_dev_busy(dev) netif_xmit_frozen_or_drv_stopped(netdev_get_tx_queue(dev, smp_processor_id()))
 int maio_xmit(struct net_device *dev, struct sk_buff **skb, int cnt)
 {
 	int err = 0, i = 0, more = cnt;
@@ -1477,6 +1478,10 @@ int maio_post_tx_page(void *state)
 
 	assert(netdev_idx != -1);
 
+	if (unlikely(is_dev_busy(tx_thread->netdev))) {
+		inc_err(MAIO_ERR_TX_BUSY_EARLY);
+		return 0;
+	}
 	trace_debug("[%d]Starting\n",smp_processor_id());
 
 	while ((uaddr = tx_ring_entry(tx_thread))) {
