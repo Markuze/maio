@@ -607,6 +607,8 @@ static inline int pgd_devmap(pgd_t pgd)
 static inline int put_page_testzero(struct page *page)
 {
 	VM_BUG_ON_PAGE(page_ref_count(page) == 0, page);
+	if (is_maio_page(page))
+		maio_trace_page_dec(page);
 	return page_ref_dec_and_test(page);
 }
 
@@ -818,7 +820,6 @@ static inline void maio_put_page(struct page *page)
 
 	if (put_page_testzero(page))
 		maio_page_free(page);
-	maio_trace_page_rc(page);
 	VM_BUG_ON_PAGE(page_ref_count(page) > 4, page);
 }
 
@@ -829,7 +830,6 @@ static inline void maio_get_page(struct page *page)
 	VM_BUG_ON_PAGE(page_ref_count(page) < 1, page);
 	VM_BUG_ON_PAGE(PageHead(page), page);
 	page_ref_inc(page);
-	maio_trace_page_rc(page);
 	VM_BUG_ON_PAGE(page_ref_count(page) > 4, page);
 }
 

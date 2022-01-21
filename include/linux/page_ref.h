@@ -104,6 +104,8 @@ static inline void page_ref_sub(struct page *page, int nr)
 
 static inline void page_ref_inc(struct page *page)
 {
+	if (is_maio_page(page))
+		maio_trace_page_inc(page);
 	atomic_inc(&page->_refcount);
 	if (page_ref_tracepoint_active(__tracepoint_page_ref_mod))
 		__page_ref_mod(page, 1);

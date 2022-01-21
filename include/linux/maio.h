@@ -125,7 +125,7 @@ int maio_post_rx_page(struct net_device *netdev, void *addr, u32 len, u16 vlan_t
 int maio_post_rx_page_copy(struct net_device *netdev, void *addr, u32 len, u16 vlan_tci, u16 flags);
 void maio_frag_free(void *addr);
 void maio_page_free(struct page *page);
-void maio_trace_page_rc(struct page *page);
+void maio_trace_page_rc(struct page *page, int i);
 void *maio_kalloc(void);
 struct page *maio_alloc_pages(size_t order);
 

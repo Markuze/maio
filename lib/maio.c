@@ -527,7 +527,7 @@ static inline void __maio_free(struct page *page, void *addr)
 	put_buffers(addr, get_maio_elem_order(page));
 }
 
-void maio_trace_page_rc(struct page *page)
+void maio_trace_page_rc(struct page *page, int i)
 {
 	union shadow_state	*shadow = page2shadow(page);
 	struct io_md		*md = page2io_md(page);
@@ -536,10 +536,12 @@ void maio_trace_page_rc(struct page *page)
 	idx = (idx -1) & 31;
 
 	shadow->core[idx]  	= smp_processor_id();
-	shadow->rc[idx]		= page_ref_count(page);
+	shadow->rc[idx]		= i * page_ref_count(page);
 	shadow->addr[idx]	=(u64)__builtin_return_address(1);
 }
 EXPORT_SYMBOL(maio_trace_page_rc);
+#define maio_trace_page_dec(p)	maio_trace_page_rc(p, -1)
+#define maio_trace_page_inc(p)	maio_trace_page_rc(p, 1)
 
 void maio_page_free(struct page *page)
 {
