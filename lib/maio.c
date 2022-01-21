@@ -275,13 +275,14 @@ static inline void trace_page_state(struct page *page)
 
 }
 
-char *dump_page_rc(struct page *page, char *buffer, size_t size)
+static inline void dump_page_rc(struct page *page)
 {
 	union shadow_state	*shadow = page2shadow(page);
 	struct io_md		*md = page2io_md(page);
 
-	u64 idx	= atomic_read(&md->idx);
-	int i, cntr = 0;
+	u32 idx	= atomic_read(&md->idx);
+	int i;
+//	int cntr = 0;
 
 	for (i = 0; i < 32; i++) {
 		int len;
@@ -290,6 +291,12 @@ char *dump_page_rc(struct page *page, char *buffer, size_t size)
 		if (!shadow->addr[idx])
 			continue;
 
+		pr_err("%-2d:%-2d:%-2d:%ps\n",
+				idx,
+				shadow->core[idx],
+				shadow->rc[idx],
+				(void *)shadow->addr[idx]);
+/*
 		len = snprintf(&buffer[cntr], size, "%-2d:%-2d:%-2d:%ps\n",
 				idx,
 				shadow->core[idx],
@@ -297,9 +304,10 @@ char *dump_page_rc(struct page *page, char *buffer, size_t size)
 				(void *)shadow->addr[idx]);
 		size -= len;
 		cntr += len;
+*/
 		++idx;
 	}
-	return buffer;
+	return;
 }
 
 static inline void __dump_page_state(struct page *page, int line)
@@ -317,8 +325,7 @@ static inline void __dump_page_state(struct page *page, int line)
 		__builtin_return_address(0),
 		md->in_transit, md->in_transit_dbg, md->tx_cnt, md->tx_compl);
 
-	page_rc = dump_page_rc(page, page_address(alloc_pages((GFP_ATOMIC|__GFP_ZERO), 1)), (PAGE_SIZE << 1));
-	pr_err("%s\n", page_rc);
+	dump_page_rc(page);
 	dump_all_stats(NULL);
 }
 #define dump_page_state(p)	__dump_page_state(p, __LINE__)
