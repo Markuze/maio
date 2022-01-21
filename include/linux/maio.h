@@ -129,6 +129,9 @@ void maio_trace_page_rc(struct page *page, int i);
 void *maio_kalloc(void);
 struct page *maio_alloc_pages(size_t order);
 
+#define maio_trace_page_dec(p)	maio_trace_page_rc(p, 0)
+#define maio_trace_page_inc(p)	maio_trace_page_rc(p, 100)
+
 static inline struct page *maio_alloc_page(void)
 {
 	return maio_alloc_pages(0);

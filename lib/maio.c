@@ -536,12 +536,10 @@ void maio_trace_page_rc(struct page *page, int i)
 	idx = (idx -1) & 31;
 
 	shadow->core[idx]  	= smp_processor_id();
-	shadow->rc[idx]		= i * page_ref_count(page);
+	shadow->rc[idx]		= i + page_ref_count(page);
 	shadow->addr[idx]	=(u64)__builtin_return_address(1);
 }
 EXPORT_SYMBOL(maio_trace_page_rc);
-#define maio_trace_page_dec(p)	maio_trace_page_rc(p, -1)
-#define maio_trace_page_inc(p)	maio_trace_page_rc(p, 1)
 
 void maio_page_free(struct page *page)
 {

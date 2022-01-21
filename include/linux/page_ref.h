@@ -7,6 +7,8 @@
 #include <linux/page-flags.h>
 #include <linux/tracepoint-defs.h>
 
+#include <linux/maio.h>
+
 extern struct tracepoint __tracepoint_page_ref_set;
 extern struct tracepoint __tracepoint_page_ref_mod;
 extern struct tracepoint __tracepoint_page_ref_mod_and_test;
@@ -61,6 +63,62 @@ static inline void __page_ref_unfreeze(struct page *page, int v)
 }
 
 #endif
+static inline void set_maio_is_io(struct page *page)
+{
+	page = __compound_head(page, 0);
+	//page[1].uaddr |= IS_MAIO_MASK;
+}
+
+static inline void set_maio_uaddr(struct page *page, u64 uaddr)
+{
+#if 0
+	if (page[1].uaddr)
+		pr_err("Double call to set_maio_uaddr was %lx now %llx\n", page[1].uaddr, uaddr);
+#endif
+	page[1].uaddr = uaddr;
+}
+
+static inline u64 get_maio_uaddr(struct page *page)
+{
+	page = __compound_head(page, 0);
+	return page[1].uaddr;
+}
+
+static inline void set_maio_uarg(struct page *page, void *uarg)
+{
+	page[1].uarg = uarg;
+}
+
+static inline void *get_maio_uarg(struct page *page)
+{
+	page = __compound_head(page, 0);
+	return page[1].uarg;
+}
+
+static inline void set_maio_elem_order(struct page *page, unsigned int order)
+{
+	page[1].elem_order = order;
+}
+
+static inline u16 get_maio_elem_order(struct page *page)
+{
+	page = __compound_head(page, 0);
+	return page[1].elem_order;
+}
+
+static inline bool is_maio_page(struct page *page)
+{
+	if (!PageCompound(page))
+		return 0;
+
+	/* We exclude Head Pages from I/O */
+	if (PageHead(page)) {
+		return 0;
+	}
+	return get_maio_uaddr(page) ? 1 : 0;
+	//return (get_maio_uaddr(page) & IS_MAIO_MASK) ? 1 : 0;
+}
+
 
 static inline int page_ref_count(struct page *page)
 {
@@ -106,6 +164,7 @@ static inline void page_ref_inc(struct page *page)
 {
 	if (is_maio_page(page))
 		maio_trace_page_inc(page);
+
 	atomic_inc(&page->_refcount);
 	if (page_ref_tracepoint_active(__tracepoint_page_ref_mod))
 		__page_ref_mod(page, 1);
