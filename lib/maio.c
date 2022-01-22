@@ -1103,6 +1103,29 @@ static inline void advance_tx_ring(struct maio_tx_thread *tx_thread)
 	++tx_thread->tx_counter;
 }
 
+static inline maio_skb_get(struct sk_buff *skb)
+{
+	assert(skb->mark >= MAIO_OWNED_SKB);
+	skb->mark++;
+}
+
+static inline maio_skb_put(struct sk_buff *skb)
+{
+	assert(skb->mark > MAIO_OWNED_SKB);
+	skb->mark--;
+}
+
+#define MAIO_OWNED_SKB	0x11A10000
+void maio_skb_free(struct sk_buff *skb)
+{
+	static int verbose;
+
+	if (unlikely(!verbose))
+		trace_printk("%s!! [0x%x] \n", __FUNCTION__, skb->mark);
+	assert(skb->mark >= MAIO_OWNED_SKB);
+	maio_skb_put(skb);
+}
+
 #define MAIO_TX_SKB_SIZE	64
 static inline struct sk_buff *maio_alloc_skb(struct net_device *netdev)
 {
@@ -1136,6 +1159,8 @@ static inline struct sk_buff *maio_alloc_skb(struct net_device *netdev)
 	skb->head_frag = 1;
 	skb->dev = netdev;
 
+	skb->mark = MAIO_OWNED_SKB;
+	skb->destructor = maio_skb_free;
 	return skb;
 }
 
@@ -1444,6 +1469,7 @@ static inline int maio_skb_add_frags(struct sk_buff *skb, char *kaddr)
 		struct page *page = virt_to_page(kaddr);
 		size_t offset = ((u64)kaddr & (~PAGE_MASK));
 
+		/*TODO: Leaking skb */
 		if (unlikely(nr_frags >= MAX_SKB_FRAGS)) {
 			pr_err("Packet exceeds the number of skb frags(%lu)\n",
 			       MAX_SKB_FRAGS);
@@ -1517,6 +1543,7 @@ int maio_post_tx_page(void *state)
 
 		if (likely(maio_set_comp_handler(skb, md))) {
 			skb_batch[cnt++] = skb;
+			maio_skb_get(skb);
 			set_page_state(page, MAIO_PAGE_TX);
 			inc_err(MAIO_ERR_TX_START);
 		} else {
