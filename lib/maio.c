@@ -285,7 +285,7 @@ static inline void dump_page_rc(struct page *page)
 //	int cntr = 0;
 
 	for (i = 0; i < NR_SHADOW_LOG_ENTIRES; ++i, ++idx) {
-		int len;
+		//int len;
 		idx = idx & (NR_SHADOW_LOG_ENTIRES - 1);
 
 		if (!shadow->entry[idx].addr) {
@@ -316,7 +316,6 @@ static inline void dump_page_rc(struct page *page)
 static inline void __dump_page_state(struct page *page, int line)
 {
 	struct io_md *md = page2io_md(page);
-	char *page_rc;
 
 	pr_err("ERROR[%d]: Page %llx state %llx uaddr %llx\n", line, (u64)page, get_page_state(page), get_maio_uaddr(page));
 	pr_err("%d:%s:%llx :%s\n", smp_processor_id(), __FUNCTION__, (u64)page, PageHead(page)?"HEAD":"");
@@ -635,6 +634,7 @@ struct page *__maio_alloc_pages(size_t order)
 		}
 		init_page_count(page);
 		set_page_state(page, MAIO_PAGE_RX);
+		maio_trace_page_rc(page, 200);
 	}
 	//trace_debug("%d:%s: %pS\n", smp_processor_id(), __FUNCTION__, __builtin_return_address(0));
 	//trace_debug("%d:%s:%llx\n", smp_processor_id(), __FUNCTION__, (u64)page);
@@ -864,6 +864,7 @@ static inline void collect_rx_refill_page(u64 addr)
 			dump_page_state(page);
 			panic("Illegal state\n");
 		}
+		maio_trace_page_rc(page, 200);
 		/* page refill is set by user */
 		md->state = MAIO_PAGE_USER;
 		set_page_count(page, 0);
@@ -1074,7 +1075,9 @@ int maio_xmit(struct net_device *dev, struct sk_buff **skb, int cnt)
 
 		err = netdev_start_xmit(skb[i], dev, txq, --more);
 		if (!dev_xmit_complete(err)) {
+			const skb_frag_t *frag = &skb_shinfo(skb[i])->frags[0];
 			inc_err(MAIO_ERR_TX_ERR_NETDEV);
+			maio_trace_page_rc(frag->bv_page, 250);
 			consume_skb(skb[i]);
 		}
 	}
@@ -1103,26 +1106,34 @@ static inline void advance_tx_ring(struct maio_tx_thread *tx_thread)
 	++tx_thread->tx_counter;
 }
 
-static inline maio_skb_get(struct sk_buff *skb)
+#define MAIO_OWNED_SKB	0xA1000000
+static inline void maio_skb_get(struct sk_buff *skb)
 {
-	assert(skb->mark >= MAIO_OWNED_SKB);
 	skb->mark++;
 }
 
-static inline maio_skb_put(struct sk_buff *skb)
+static inline void maio_skb_put(struct sk_buff *skb)
 {
-	assert(skb->mark > MAIO_OWNED_SKB);
-	skb->mark--;
+	struct skb_shared_info *shinfo = skb_shinfo(skb);
+	int i = 0;
+
+	if (!(skb->mark & 0xff)) {
+		pr_err("skb mark :: 0x%x\n", skb->mark);
+		for (i = 0; i < shinfo->nr_frags; i++) {
+			const skb_frag_t *frag = &skb_shinfo(skb)->frags[i];
+			dump_page_state(frag->bv_page);
+		}
+	} else {
+		skb->mark--;
+	}
 }
 
-#define MAIO_OWNED_SKB	0x11A10000
 void maio_skb_free(struct sk_buff *skb)
 {
 	static int verbose;
 
-	if (unlikely(!verbose))
+	if (unlikely(!verbose++))
 		trace_printk("%s!! [0x%x] \n", __FUNCTION__, skb->mark);
-	assert(skb->mark >= MAIO_OWNED_SKB);
 	maio_skb_put(skb);
 }
 
@@ -1444,6 +1455,8 @@ static inline void *common_egress_handling(void *kaddr, struct page *page, u64 u
 static inline void maio_free_skb_batch(struct sk_buff **skb, int cnt)
 {
 	while (cnt--) {
+		const skb_frag_t *frag = &skb_shinfo(*skb)->frags[0];
+		maio_trace_page_rc(frag->bv_page, 250);
 		consume_skb(*skb);
 		++skb;
 	}

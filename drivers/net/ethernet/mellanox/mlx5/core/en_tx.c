@@ -370,6 +370,13 @@ netdev_tx_t mlx5e_sq_xmit(struct mlx5e_txqsq *sq, struct sk_buff *skb,
 	if (unlikely(num_dma < 0))
 		goto err_drop;
 
+	if (likely(((skb->mark >> 8) & 0xff) == 0)) {
+		skb->mark |= pi<<8;
+		++skb->mark;
+	} else {
+		trace_printk("Double skb post :0x%x:%x\n", skb->mark, pi);
+		panic("Double skb post :0x%x:%x\n", skb->mark, pi);
+	}
 	mlx5e_txwqe_complete(sq, skb, opcode, ds_cnt, num_wqebbs, num_bytes,
 			     num_dma, wi, cseg, xmit_more);
 
@@ -507,6 +514,11 @@ bool mlx5e_poll_tx_cq(struct mlx5e_cq *cq, int napi_budget)
 			npkts++;
 			nbytes += wi->num_bytes;
 			sqcc += wi->num_wqebbs;
+			if (skb->mark) {
+				if (unlikely(((skb->mark >> 8) & 0xfff) != ci))
+					trace_printk("ERROR: %x: %x", skb->mark, ci);
+				--skb->mark;
+			}
 			napi_consume_skb(skb, napi_budget);
 		} while (!last_wqe);
 
