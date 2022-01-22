@@ -370,9 +370,12 @@ netdev_tx_t mlx5e_sq_xmit(struct mlx5e_txqsq *sq, struct sk_buff *skb,
 	if (unlikely(num_dma < 0))
 		goto err_drop;
 
-	if (likely(((skb->mark >> 8) & 0xff) == 0)) {
+	if (likely(((skb->mark >> 8) & 0xfff) == 0)) {
+		static int verbose;
 		skb->mark |= pi<<8;
 		++skb->mark;
+		if (unlikely(!verbose++))
+			trace_printk("skb post :0x%x:%x\n", skb->mark, pi);
 	} else {
 		trace_printk("Double skb post :0x%x:%x\n", skb->mark, pi);
 		panic("Double skb post :0x%x:%x\n", skb->mark, pi);
@@ -515,6 +518,9 @@ bool mlx5e_poll_tx_cq(struct mlx5e_cq *cq, int napi_budget)
 			nbytes += wi->num_bytes;
 			sqcc += wi->num_wqebbs;
 			if (skb->mark) {
+				static int verbose;
+				if (unlikely(!verbose++))
+					trace_printk("ERROR: %x: %x", skb->mark, ci);
 				if (unlikely(((skb->mark >> 8) & 0xfff) != ci))
 					trace_printk("ERROR: %x: %x", skb->mark, ci);
 				--skb->mark;
