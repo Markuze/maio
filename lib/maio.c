@@ -284,21 +284,22 @@ static inline void dump_page_rc(struct page *page)
 	int i;
 //	int cntr = 0;
 
-	for (i = 0; i < 32; ++i, ++idx) {
+	for (i = 0; i < NR_SHADOW_LOG_ENTIRES; ++i, ++idx) {
 		int len;
-		idx = idx & 31;
+		idx = idx & (NR_SHADOW_LOG_ENTIRES - 1);
 
-		if (!shadow->addr[idx]) {
+		if (!shadow->entry[idx].addr) {
 			pr_err("%-2d:----------\n",
 					idx);
 			continue;
 		}
 
-		pr_err("%-2d:%-2d:%-2d:%ps\n",
+		pr_err("%-2d:%-2d:%-2d:%ps:..%ps\n",
 				idx,
-				shadow->core[idx],
-				shadow->rc[idx],
-				(void *)shadow->addr[idx]);
+				shadow->entry[idx].core,
+				shadow->entry[idx].rc,
+				(void *)shadow->entry[idx].addr,
+				(void *)shadow->entry[idx].addr2);
 /*
 		len = snprintf(&buffer[cntr], size, "%-2d:%-2d:%-2d:%ps\n",
 				idx,
@@ -531,11 +532,12 @@ void maio_trace_page_rc(struct page *page, int i)
 	struct io_md		*md = page2io_md(page);
 
 	u64 idx	= atomic_inc_return(&md->idx);
-	idx = (idx -1) & 31;
+	idx = (idx -1) & (NR_SHADOW_LOG_ENTIRES -1);
 
-	shadow->core[idx]  	= smp_processor_id();
-	shadow->rc[idx]		= i + page_ref_count(page);
-	shadow->addr[idx]	=(u64)__builtin_return_address(1);
+	shadow->entry[idx].core  	= smp_processor_id();
+	shadow->entry[idx].rc		= i + page_ref_count(page);
+	shadow->entry[idx].addr		=(u64)__builtin_return_address(1);
+	shadow->entry[idx].addr2	=(u64)__builtin_return_address(4);
 }
 EXPORT_SYMBOL(maio_trace_page_rc);
 
@@ -1456,6 +1458,8 @@ static inline int maio_skb_add_frags(struct sk_buff *skb, char *kaddr)
 		skb->truesize += md->len;
 		skb->len += md->len;
 		++nr_frags;
+		if (nr_frags > 1)
+			trace_printk("Ehh? %d %llx\n", nr_frags, (u64)page);
 
 		kaddr = (md->next_frag) ? uaddr2addr(md->next_frag) : NULL;
 	};

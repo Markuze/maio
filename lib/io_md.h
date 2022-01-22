@@ -134,13 +134,16 @@ struct io_md {
 	u32 prev_line;
 } ____cacheline_aligned_in_smp;
 
+#define NR_SHADOW_LOG_ENTIRES	16
 union shadow_state {
 	u8 __size[320];
 	struct {
-		u8 core[32];
-		u8 rc[32];
-		u64 addr[32];
-	};
+		u8 core;
+		u8 rc;
+		u16 unused;
+		u64 addr;
+		u64 addr2;
+	} entry[NR_SHADOW_LOG_ENTIRES];
 } ____cacheline_aligned_in_smp;
 
 #define IO_MD_OFF      (PAGE_SIZE - SKB_DATA_ALIGN(sizeof(struct io_md)))
