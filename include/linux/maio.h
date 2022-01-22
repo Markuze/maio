@@ -42,8 +42,8 @@ extern maio_filter_func_p maio_filter;
 extern struct user_matrix *global_maio_matrix[MAX_DEV_NUM];
 
 /* Current mem layout
-	4K [64|128 |640   |512      |2KB  |256B 	    |320B       |128B		   ]
-	   [ dpdk  |vc_pkt| headroom| data| hole <shadow md>| skb_shinfo| io_md + ubuf_info]
+	4K [64|128 |640   |512      |2KB  |320B 	    |320B       | 64B  ]
+	   [ dpdk  |vc_pkt| headroom| data| hole <shadow md>| skb_shinfo| io_md ]
 */
 /********* Caution: Should be same as user counterpart ************************/
 

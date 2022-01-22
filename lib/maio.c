@@ -502,10 +502,13 @@ static inline void __maio_free(struct page *page, void *addr)
 	assert(page_ref_count(page) == 0);
 
 	if (unlikely(! (get_page_state(page) & MAIO_PAGE_IO))) {
-		dump_page_state(page);
-		dump_io_md(virt2io_md(addr), "MD");
-		set_page_state(page, MAIO_PAGE_USER);
 		inc_err(MAIO_ERR_BAD_FREE_PAGE);
+
+		dump_io_md(virt2io_md(addr), "MD");
+		dump_page_state(page);
+		panic("Illegal page state Non IO Page! \n");
+
+		set_page_state(page, MAIO_PAGE_USER);
 		init_page_count(page);
 		return;
 	}
@@ -1420,7 +1423,7 @@ static inline void maio_free_skb_batch(struct sk_buff **skb, int cnt)
 }
 
 #define __min(a, b) ((a) < (b) ? (a) : (b))
-static inline int skb_add_frags(struct sk_buff *skb, char *kaddr)
+static inline int maio_skb_add_frags(struct sk_buff *skb, char *kaddr)
 {
 	struct io_md *md = virt2io_md(kaddr);
 	int len = __min(MAIO_TX_SKB_SIZE, md->len);
@@ -1461,7 +1464,7 @@ static inline int skb_add_frags(struct sk_buff *skb, char *kaddr)
 	return 0;
 }
 
-#define TX_BATCH_SIZE	32
+#define TX_BATCH_SIZE	64
 int maio_post_tx_page(void *state)
 {
 	struct maio_tx_thread *tx_thread = state;
@@ -1498,7 +1501,7 @@ int maio_post_tx_page(void *state)
 			continue;
 		}
 
-		if (skb_add_frags(skb, kaddr)) {
+		if (maio_skb_add_frags(skb, kaddr)) {
 			pr_err("%s) Failed to add frags\n", __FUNCTION__);
 			inc_err(MAIO_ERR_TX_FRAG_ERR);
 			advance_tx_ring(tx_thread);
@@ -1571,7 +1574,7 @@ static inline ssize_t maio_tx(struct file *file, const char __user *buf,
 	        trace_debug("[%d]wake up thread[state %0lx][%s]\n", smp_processor_id(), thread->state, val ? "WAKING":"UP");
 	}
 #else
-	maio_post_tx_page(tx_thread);
+	while( maio_post_tx_page(tx_thread));
 #endif
 
 	return size;
