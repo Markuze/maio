@@ -284,12 +284,15 @@ static inline void dump_page_rc(struct page *page)
 	int i;
 //	int cntr = 0;
 
-	for (i = 0; i < 32; i++) {
+	for (i = 0; i < 32; ++i, ++idx) {
 		int len;
 		idx = idx & 31;
 
-		if (!shadow->addr[idx])
+		if (!shadow->addr[idx]) {
+			pr_err("%-2d:----------\n",
+					idx);
 			continue;
+		}
 
 		pr_err("%-2d:%-2d:%-2d:%ps\n",
 				idx,
@@ -305,7 +308,6 @@ static inline void dump_page_rc(struct page *page)
 		size -= len;
 		cntr += len;
 */
-		++idx;
 	}
 	return;
 }
@@ -505,14 +507,7 @@ static inline void __maio_free(struct page *page, void *addr)
 		set_page_state(page, MAIO_PAGE_USER);
 		inc_err(MAIO_ERR_BAD_FREE_PAGE);
 		init_page_count(page);
-#if 0
-		dump_io_md(kaddr2shadow_md(addr), "SHADOW");
-		if (kaddr2shadow_md(addr)->state == MAIO_PAGE_NAPI) {
-			// Corruption detected on NAPI flow update from shadow
-			pr_err("Corruption detected on NAPI flow update from shadow\n");
-			memcpy(virt2io_md(addr), kaddr2shadow_md(addr), sizeof(struct io_md));
-		}
-#endif
+		return;
 	}
 	if (unlikely(virt2io_md(addr)->state == MAIO_PAGE_TX)) {
 		pr_err("%s Zero refcount page %llx(state %llx) rc %d\n", __FUNCTION__,
