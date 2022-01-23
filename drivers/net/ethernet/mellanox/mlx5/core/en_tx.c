@@ -41,6 +41,61 @@
 #include "en_accel/ktls.h"
 #include "lib/clock.h"
 
+static inline void dump_skb_record(struct mlx5e_sq_stats *stats)
+{
+	int i = 0;
+	struct mlx5e_q_record *rec = &stats->record;
+	struct mlx5e_skb_record *record;
+
+	if (unlikely(!rec->record)) {
+		rec->record = kcalloc(1024, sizeof(struct mlx5e_skb_record), GFP_KERNEL);
+	}
+	record = rec->record;
+
+	for (i  = 0; i < 1024; i++) {
+		trace_printk("[%d]<%d:%d> %llx :: %llx", i, record[i].pi, record[i].pi_prev, (u64)record[i].rec, (u64)record[i].rec_prev);
+		if (rec->pi == i)
+			trace_printk("<== PI");
+		trace_printk("\n");
+
+	}
+	trace_printk("%d:: pi %d ci %d\n", smp_processor_id(), rec->pi, rec->ci);
+}
+static inline void record_tx_skb(struct mlx5e_sq_stats *stats, struct sk_buff *skb, int idx)
+{
+	struct mlx5e_q_record *rec = &stats->record;
+	struct mlx5e_skb_record *record;
+
+	if (unlikely(!rec->record)) {
+		rec->record = kcalloc(1024, sizeof(struct mlx5e_skb_record), GFP_KERNEL);
+	}
+	record = rec->record;
+
+	rec->pi &= 1023;
+
+	record[rec->pi].rec_prev	= record[rec->pi].rec;
+	record[rec->pi].pi_prev		= record[rec->pi].pi;
+	record[rec->pi].rec 		= skb;
+	record[rec->pi].pi		= idx;
+	++rec->pi;
+}
+
+static inline void record_comp_skb(struct mlx5e_sq_stats *stats, struct sk_buff *skb, int idx)
+{
+	struct mlx5e_q_record *rec = &stats->record;
+	struct mlx5e_skb_record *record;
+
+	if (unlikely(!rec->record)) {
+		rec->record = kcalloc(1024, sizeof(struct mlx5e_skb_record), GFP_KERNEL);
+	}
+	record = rec->record;
+
+	/* TODO: retrieve PI from mark ando store CI nd compare skb...*/
+	if (unlikely(refcount_read(&skb->users) == 0)) {
+		dump_skb_record(stats);
+	}
+}
+
 static void mlx5e_dma_unmap_wqe_err(struct mlx5e_txqsq *sq, u8 num_dma)
 {
 	int i;
@@ -283,6 +338,8 @@ netdev_tx_t mlx5e_sq_xmit(struct mlx5e_txqsq *sq, struct sk_buff *skb,
 	int num_dma;
 	__be16 mss;
 
+	static int verbose;
+
 	/* Calc ihs and ds cnt, no writes to wqe yet */
 	ds_cnt = sizeof(*wqe) / MLX5_SEND_WQE_DS;
 	if (skb_is_gso(skb)) {
@@ -370,16 +427,23 @@ netdev_tx_t mlx5e_sq_xmit(struct mlx5e_txqsq *sq, struct sk_buff *skb,
 	if (unlikely(num_dma < 0))
 		goto err_drop;
 
+	if (unlikely(!verbose)) {
+		trace_printk("Hello TX\n");
+		verbose++;
+	}
+
 	if (likely(((skb->mark >> 8) & 0xfff) == 0)) {
-		static int verbose;
+
 		skb->mark |= pi<<8;
-		++skb->mark;
-		if (unlikely(!verbose++))
+		if (unlikely(verbose == 1)) {
 			trace_printk("skb post :0x%x:%x\n", skb->mark, pi);
+			verbose++;
+		}
 	} else {
 		trace_printk("Double skb post :0x%x:%x\n", skb->mark, pi);
 		panic("Double skb post :0x%x:%x\n", skb->mark, pi);
 	}
+	record_tx_skb(stats, skb, pi);
 	mlx5e_txwqe_complete(sq, skb, opcode, ds_cnt, num_wqebbs, num_bytes,
 			     num_dma, wi, cseg, xmit_more);
 
@@ -436,6 +500,8 @@ bool mlx5e_poll_tx_cq(struct mlx5e_cq *cq, int napi_budget)
 	u16 npkts;
 	u16 sqcc;
 	int i;
+
+	static int verbose;
 
 	sq = container_of(cq, struct mlx5e_txqsq, cq);
 
@@ -517,14 +583,19 @@ bool mlx5e_poll_tx_cq(struct mlx5e_cq *cq, int napi_budget)
 			npkts++;
 			nbytes += wi->num_bytes;
 			sqcc += wi->num_wqebbs;
+			if (unlikely(!verbose)) {
+				trace_printk("Hello RX\n");
+				verbose++;
+			}
 			if (skb->mark) {
-				static int verbose;
-				if (unlikely(!verbose++))
+				if (unlikely(verbose == 1)) {
 					trace_printk("ERROR: %x: %x", skb->mark, ci);
+					verbose++;
+				}
 				if (unlikely(((skb->mark >> 8) & 0xfff) != ci))
 					trace_printk("ERROR: %x: %x", skb->mark, ci);
-				--skb->mark;
 			}
+			record_comp_skb(stats, skb, ci);
 			napi_consume_skb(skb, napi_budget);
 		} while (!last_wqe);
 

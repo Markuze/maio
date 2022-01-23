@@ -256,6 +256,19 @@ struct mlx5e_rq_stats {
 	u64 recover;
 };
 
+struct mlx5e_skb_record {
+	struct sk_buff *rec;
+	struct sk_buff *rec_prev;
+	int pi;
+	int pi_prev;
+};
+
+struct mlx5e_q_record {
+	int ci;
+	int pi;
+	struct mlx5e_skb_record *record;
+};
+
 struct mlx5e_sq_stats {
 	/* commonly accessed in data path */
 	u64 packets;
@@ -290,6 +303,7 @@ struct mlx5e_sq_stats {
 	u64 cqes ____cacheline_aligned_in_smp;
 	u64 wake;
 	u64 cqe_err;
+	struct mlx5e_q_record record;
 };
 
 struct mlx5e_xdpsq_stats {

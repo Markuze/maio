@@ -1123,6 +1123,7 @@ static inline void maio_skb_put(struct sk_buff *skb)
 			const skb_frag_t *frag = &skb_shinfo(skb)->frags[i];
 			dump_page_state(frag->bv_page);
 		}
+		panic("double free\n");
 	} else {
 		skb->mark--;
 	}
@@ -1317,8 +1318,13 @@ static inline int maio_set_comp_handler(struct sk_buff *skb, struct io_md *md)
 	md->in_transit		= 1;
 	uarg->callback		= maio_zc_tx_callback;
 	uarg->ctx 		= md;
+	/* ctx, and callback should always be the same */
+
+	uarg->desc		= (unsigned long)(skb);
 	refcount_inc(&uarg->refcnt);
 
+	/* make sure the uarg is correct before its visible */
+	smp_wmb();
 # if 0
 	trace_printk("%s: %llx TX in_transit %s [%d]\n", __FUNCTION__, (u64)uarg,
 			md->in_transit ? "YES": "NO", refcount_read(&uarg->refcnt));
@@ -1941,8 +1947,12 @@ static inline ssize_t init_user_rings(struct file *file, const char __user *buf,
 
 		tx_thread->dev_idx = dev_idx;
 		tx_thread->ring_id = i;
+#define MAIO_DIRECT_DEV_TX
+#ifdef MAIO_DIRECT_DEV_TX
 		tx_thread->netdev = maio_devs[dev_map.on_tx[dev_idx]];//maio_devs[dev_idx];
-		//tx_thread->netdev = maio_devs[dev_idx];
+#else
+		tx_thread->netdev = maio_devs[dev_idx];
+#endif
 		pr_err("tx_netdev for %d is %s\n", dev_idx, tx_thread->netdev->name);
 #ifdef MAIO_ASYNC_TX
 		tx_thread->thread = kthread_create(threadfn, tx_thread, "maio_tx_%d_thread_%ld", dev_idx, i);

@@ -1003,7 +1003,22 @@ static inline unsigned int skb_napi_id(const struct sk_buff *skb)
  *
  * Returns true if we can free the skb.
  */
-static inline bool skb_unref(struct sk_buff *skb)
+static inline bool __skb_unref_strict(struct sk_buff *skb)
+{
+	if (unlikely(!skb))
+		return false;
+
+	if (unlikely(refcount_read(&skb->users) == 0)) {
+		pr_err("Double Free %x\n", skb->mark);
+		panic("Double SKB free\n");
+	}
+	if (unlikely(!refcount_dec_and_test(&skb->users)))
+		return false;
+
+	return true;
+}
+
+static inline bool __skb_unref(struct sk_buff *skb)
 {
 	if (unlikely(!skb))
 		return false;
@@ -1014,6 +1029,7 @@ static inline bool skb_unref(struct sk_buff *skb)
 
 	return true;
 }
+#define skb_unref(s)	__skb_unref_strict(s)
 
 void skb_release_head_state(struct sk_buff *skb);
 void kfree_skb(struct sk_buff *skb);
