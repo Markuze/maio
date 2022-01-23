@@ -53,11 +53,9 @@ static inline void dump_skb_record(struct mlx5e_sq_stats *stats)
 	record = rec->record;
 
 	for (i  = 0; i < 1024; i++) {
-		trace_printk("[%d]<%d:%d> %llx :: %llx", i, record[i].pi, record[i].pi_prev, (u64)record[i].rec, (u64)record[i].rec_prev);
-		if (rec->pi == i)
-			trace_printk("<== PI");
-		trace_printk("\n");
-
+		trace_printk("[%d]<%d:%d> %llx :: %llx\n", i,
+			record[i].pi, record[i].pi_prev, (u64)record[i].rec, (u64)record[i].rec_prev,
+			(rec->pi == i) ? "<== PI" : "");
 	}
 	trace_printk("%d:: pi %d ci %d\n", smp_processor_id(), rec->pi, rec->ci);
 }
