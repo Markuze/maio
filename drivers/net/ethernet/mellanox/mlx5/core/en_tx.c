@@ -53,7 +53,7 @@ static inline void dump_skb_record(struct mlx5e_sq_stats *stats)
 	record = rec->record;
 
 	for (i  = 0; i < 1024; i++) {
-		trace_printk("[%d]<%d:%d> %llx :: %llx\n", i,
+		trace_printk("[%d]<%d:%d> %llx :: %llx %s\n", i,
 			record[i].pi, record[i].pi_prev, (u64)record[i].rec, (u64)record[i].rec_prev,
 			(rec->pi == i) ? "<== PI" : "");
 	}
@@ -91,6 +91,7 @@ static inline void record_comp_skb(struct mlx5e_sq_stats *stats, struct sk_buff 
 	/* TODO: retrieve PI from mark ando store CI nd compare skb...*/
 	if (unlikely(refcount_read(&skb->users) == 0)) {
 		dump_skb_record(stats);
+		trace_printk("Faulting skb %llx ci [%d] mark %x\n", (u64)skb, idx, skb->mark);
 	}
 }
 

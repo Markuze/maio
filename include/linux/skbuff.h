@@ -1009,7 +1009,7 @@ static inline bool __skb_unref_strict(struct sk_buff *skb)
 		return false;
 
 	if (unlikely(refcount_read(&skb->users) == 0)) {
-		pr_err("Double Free: %llx %x\n", skb, skb->mark);
+		pr_err("Double Free: %llx %x\n", (u64)skb, skb->mark);
 		panic("Double SKB free\n");
 	}
 	if (unlikely(!refcount_dec_and_test(&skb->users)))
