@@ -1947,7 +1947,7 @@ static inline ssize_t init_user_rings(struct file *file, const char __user *buf,
 
 		tx_thread->dev_idx = dev_idx;
 		tx_thread->ring_id = i;
-#define MAIO_DIRECT_DEV_TX
+//#define MAIO_DIRECT_DEV_TX
 #ifdef MAIO_DIRECT_DEV_TX
 		tx_thread->netdev = maio_devs[dev_map.on_tx[dev_idx]];//maio_devs[dev_idx];
 #else
