@@ -522,6 +522,8 @@ static inline void __maio_free(struct page *page, void *addr)
 	assert(get_page_state(page) & MAIO_PAGE_IO);
 
 	set_page_state(page, MAIO_PAGE_FREE);
+
+	smp_wmb();
 	put_buffers(addr, get_maio_elem_order(page));
 }
 
@@ -855,6 +857,8 @@ static inline void collect_rx_refill_page(u64 addr)
 		set_page_state(page, MAIO_PAGE_HEAD);
 		assert(!is_maio_page(page));
 		inc_err(MAIO_ERR_REFILL_HEAD);
+
+		smp_wmb();
 		maio_cache_head(page);
 	} else {
 
@@ -869,6 +873,8 @@ static inline void collect_rx_refill_page(u64 addr)
 		md->state = MAIO_PAGE_USER;
 		set_page_count(page, 0);
 		set_page_state(page, MAIO_PAGE_FREE);
+
+		smp_wmb();
 		maio_free_elem(kaddr, 0);
 	}
 }
@@ -921,6 +927,7 @@ static inline int __maio_post_rx_page(struct net_device *netdev, struct page *pa
 		if (page) {
 			/* its a MAIO page and we consume it */
 			set_page_state(page, MAIO_PAGE_CONSUMED);
+			smp_wmb();
 			put_page(page);
 		}
 		return 1;
@@ -987,6 +994,7 @@ static inline int __maio_post_rx_page(struct net_device *netdev, struct page *pa
 
 	show_io(addr, "RX");
 #if 1
+	smp_wmb();
 	post_rx_ring(qp, addr2uaddr(addr));
 	trace_debug("%d:RX %s:%llx[%u]%llx{%d}\n", smp_processor_id(),
 			page ? "COPY" : "ZC",
@@ -1040,6 +1048,7 @@ int maio_post_rx_page(struct net_device *netdev, void *addr, u32 len, u16 vlan_t
 		if (page) {
 			inc_err(MAIO_ERR_NS);
 			set_page_state(page, MAIO_PAGE_NS);
+			smp_wmb();
 			put_page(page);
 		}
 		return 0;
