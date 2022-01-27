@@ -132,6 +132,7 @@ struct page *maio_alloc_pages(size_t order);
 #define MAIO_PAGE_RC_ALLOC	(0xA<<2)
 #define MAIO_PAGE_RC_FREE	(0xF<<2)
 #define MAIO_PAGE_RC_TX		(0x7<<2)
+#define MAIO_PAGE_RC_RX		(0x2<<2)
 #define MAIO_PAGE_RC_COMP	(0xC<<2)
 #define MAIO_PAGE_RC_REFILL	(0xE<<2)
 #define MAIO_PAGE_RC_DEC	(0xD<<2)

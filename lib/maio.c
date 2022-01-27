@@ -539,9 +539,11 @@ void maio_trace_page_rc(struct page *page, int i)
 	idx = (idx -1) & (NR_SHADOW_LOG_ENTIRES -1);
 
 	shadow->entry[idx].core  	= smp_processor_id();
-	shadow->entry[idx].rc		= i + page_ref_count(page);
+	shadow->entry[idx].rc		= i | page_ref_count(page);
 	shadow->entry[idx].addr		=(u64)__builtin_return_address(1);
 	shadow->entry[idx].addr2	=(u64)__builtin_return_address(4);
+
+	assert(io_md->state != MAIO_PAGE_FREE);
 }
 EXPORT_SYMBOL(maio_trace_page_rc);
 
@@ -983,11 +985,13 @@ static inline int __maio_post_rx_page(struct net_device *netdev, struct page *pa
 #endif
 
 	if (unlikely( ! (get_page_state(page) & (MAIO_PAGE_RX|MAIO_PAGE_HEAD)))) {
+		smp_rmb();
 		dump_page_state(page);
 		assert(get_page_state(page) & (MAIO_PAGE_RX|MAIO_PAGE_HEAD));
 	}
 
 	set_page_state(page, MAIO_PAGE_USER);
+	maio_trace_page_rc(page, MAIO_PAGE_RC_RX);
 	assert(uaddr2addr(addr2uaddr(addr)) == addr);
 	md = virt2io_md(addr);
 	md->len 	= len;
