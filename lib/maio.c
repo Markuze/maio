@@ -871,6 +871,8 @@ static inline void collect_rx_refill_page(u64 addr)
 		maio_cache_head(page);
 	} else {
 
+		int rc = page_ref_count(page);
+
 		assert(is_maio_page(page));
 		assert(get_maio_elem_order(__compound_head(page, 0)) == 0);
 		if (get_page_state(page) != MAIO_PAGE_REFILL) {
@@ -879,12 +881,19 @@ static inline void collect_rx_refill_page(u64 addr)
 		}
 		maio_trace_page_rc(page, MAIO_PAGE_RC_REFILL);
 		/* page refill is set by user */
-		md->state = MAIO_PAGE_USER;
-		set_page_count(page, 0);
-		set_page_state(page, MAIO_PAGE_FREE);
 
-		smp_wmb();
-		maio_free_page(page);
+		if (likely(rc)) {
+			if (likely(put_page_testzero(page)))
+				maio_page_free(page);
+			else
+				dump_page_state(page);
+		} else {
+			inc_err(MAIO_ERR_REFILL_NEW);
+			set_page_state(page, MAIO_PAGE_FREE);
+
+			smp_wmb();
+			__maio_free_elem(kaddr, get_maio_elem_order(page));
+		}
 	}
 }
 static inline int prep_rx_ring_entry(struct percpu_maio_qp *qp)
