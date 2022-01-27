@@ -483,19 +483,21 @@ static inline int order2idx(size_t order)
 	return 0;
 }
 
-static inline void maio_free_elem(void *elem, u16 order)
+static inline void __maio_free_elem(void *elem, u16 order)
 {
 	mag_free_elem(&global_maio.mag[order2idx(order)], elem);
 }
 
+#if 0
 //put_page
 static inline void put_buffers(void *elem, u16 order)
 {
 	/*TODO: order may make sense some day in case of e.g., 2K buffers
 		order also makes sense for multipage allocs.
 	*/
-	maio_free_elem(elem, order);
+	__maio_free_elem(elem, order);
 }
+#endif
 
 static inline void __maio_free(struct page *page, void *addr)
 {
@@ -527,7 +529,7 @@ static inline void __maio_free(struct page *page, void *addr)
 	set_page_state(page, MAIO_PAGE_FREE);
 
 	smp_wmb();
-	put_buffers(addr, get_maio_elem_order(page));
+	__maio_free_elem(addr, get_maio_elem_order(page));
 }
 
 void maio_trace_page_rc(struct page *page, int i)
@@ -543,9 +545,11 @@ void maio_trace_page_rc(struct page *page, int i)
 	shadow->entry[idx].addr		=(u64)__builtin_return_address(1);
 	shadow->entry[idx].addr2	=(u64)__builtin_return_address(4);
 
-	assert(io_md->state != MAIO_PAGE_FREE);
+	assert(md->state != MAIO_PAGE_FREE);
 }
 EXPORT_SYMBOL(maio_trace_page_rc);
+
+#define maio_free_page(p) __maio_free(page, page_address(p))
 
 void maio_page_free(struct page *page)
 {
@@ -880,7 +884,7 @@ static inline void collect_rx_refill_page(u64 addr)
 		set_page_state(page, MAIO_PAGE_FREE);
 
 		smp_wmb();
-		maio_free_elem(kaddr, 0);
+		maio_free_page(page);
 	}
 }
 static inline int prep_rx_ring_entry(struct percpu_maio_qp *qp)
@@ -2028,7 +2032,7 @@ static inline ssize_t maio_add_pages_0(struct file *file, const char __user *buf
 			set_page_state(page, MAIO_PAGE_FREE);
 			assert(get_maio_elem_order(__compound_head(page, 0)) == 0);
 			assert(is_maio_page(page));
-			maio_free_elem(kbase, 0);
+			__maio_free_elem(kbase, 0);
 		}
 		inc_state(MAIO_PAGE_NEW);
 	}
