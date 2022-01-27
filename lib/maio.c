@@ -294,10 +294,11 @@ static inline void dump_page_rc(struct page *page)
 			continue;
 		}
 
-		pr_err("%-2d:%-2d:%-2d:%ps:..%ps\n",
+		pr_err("%-2d:%-2d:%-2d [0x%x]:%ps:..%ps\n",
 				idx,
 				shadow->entry[idx].core,
-				shadow->entry[idx].rc,
+				(shadow->entry[idx].rc)& 0x3,
+				(shadow->entry[idx].rc)>>2,
 				(void *)shadow->entry[idx].addr,
 				(void *)shadow->entry[idx].addr2);
 /*
@@ -510,6 +511,7 @@ static inline void __maio_free(struct page *page, void *addr)
 
 		set_page_state(page, MAIO_PAGE_USER);
 		init_page_count(page);
+		maio_trace_page_rc(page, (0xF1<<2));
 		return;
 	}
 	if (unlikely(virt2io_md(addr)->state == MAIO_PAGE_TX)) {
@@ -521,6 +523,7 @@ static inline void __maio_free(struct page *page, void *addr)
 	//	(u64)page, get_page_state(page), page_ref_count(page),page_ref_count(page));
 	assert(get_page_state(page) & MAIO_PAGE_IO);
 
+	maio_trace_page_rc(page, MAIO_PAGE_RC_FREE);
 	set_page_state(page, MAIO_PAGE_FREE);
 
 	smp_wmb();
@@ -636,7 +639,7 @@ struct page *__maio_alloc_pages(size_t order)
 		}
 		init_page_count(page);
 		set_page_state(page, MAIO_PAGE_RX);
-		maio_trace_page_rc(page, 200);
+		maio_trace_page_rc(page, MAIO_PAGE_RC_ALLOC);
 	}
 	//trace_debug("%d:%s: %pS\n", smp_processor_id(), __FUNCTION__, __builtin_return_address(0));
 	//trace_debug("%d:%s:%llx\n", smp_processor_id(), __FUNCTION__, (u64)page);
@@ -868,7 +871,7 @@ static inline void collect_rx_refill_page(u64 addr)
 			dump_page_state(page);
 			panic("Illegal state\n");
 		}
-		maio_trace_page_rc(page, 200);
+		maio_trace_page_rc(page, MAIO_PAGE_RC_REFILL);
 		/* page refill is set by user */
 		md->state = MAIO_PAGE_USER;
 		set_page_count(page, 0);
@@ -1086,7 +1089,7 @@ int maio_xmit(struct net_device *dev, struct sk_buff **skb, int cnt)
 		if (!dev_xmit_complete(err)) {
 			const skb_frag_t *frag = &skb_shinfo(skb[i])->frags[0];
 			inc_err(MAIO_ERR_TX_ERR_NETDEV);
-			maio_trace_page_rc(frag->bv_page, 250);
+			maio_trace_page_rc(frag->bv_page, (0xFF<<2));
 			consume_skb(skb[i]);
 		}
 	}
@@ -1238,6 +1241,8 @@ static void maio_zc_tx_callback(struct ubuf_info *ubuf, bool zc_success)
 		dump_page_state(page);
 	}
 	assert(get_page_state(page) & (MAIO_PAGE_TX|MAIO_PAGE_NAPI));
+
+	maio_trace_page_rc(page, MAIO_PAGE_RC_COMP);
 
 	if (refcount_dec_and_test(&ubuf->refcnt)) {
 		set_page_state(page, MAIO_PAGE_USER);
@@ -1471,7 +1476,7 @@ static inline void maio_free_skb_batch(struct sk_buff **skb, int cnt)
 {
 	while (cnt--) {
 		const skb_frag_t *frag = &skb_shinfo(*skb)->frags[0];
-		maio_trace_page_rc(frag->bv_page, 250);
+		maio_trace_page_rc(frag->bv_page, (0xFE<<2));
 		consume_skb(*skb);
 		++skb;
 	}
@@ -1565,6 +1570,7 @@ int maio_post_tx_page(void *state)
 			advance_tx_ring(tx_thread);
 			continue;
 		}
+		maio_trace_page_rc(page, MAIO_PAGE_RC_TX);
 
 		if (md->flags & MAIO_STATUS_VLAN_VALID)
 			__vlan_hwaccel_put_tag(skb, htons(ETH_P_8021Q), md->vlan_tci);
