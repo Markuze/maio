@@ -1265,7 +1265,7 @@ static void maio_zc_tx_callback(struct ubuf_info *ubuf, bool zc_success)
 		set_page_state(page, MAIO_PAGE_USER);
 		inc_err(MAIO_ERR_TX_COMP);
 		in_transit = 0;
-		assert(get_err(MAIO_ERR_TX_COMP) <= get_err(MAIO_ERR_TX_START));
+	//	assert(get_err(MAIO_ERR_TX_COMP) <= get_err(MAIO_ERR_TX_START) + get_err(MAIO_ERR_NAPI));
 	} else {
 		inc_err(MAIO_ERR_TX_COMP_TRANS);
 	}
