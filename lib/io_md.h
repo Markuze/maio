@@ -137,20 +137,21 @@ struct io_md {
 } ____cacheline_aligned_in_smp;
 
 #define NR_SHADOW_LOG_ENTIRES	16
-union shadow_state {
-	u8 __size[320];
-	struct {
-		u8 core;
-		u8 rc;
-		u16 unused;
-		u64 addr;
-		u64 addr2;
-	} entry[NR_SHADOW_LOG_ENTIRES];
+struct shadow_state {
+	union {
+		u8 __size[320];
+		struct {
+			u8 core_rc;
+			u8 mark;
+			u16 unused;
+			u64 addr;
+			u64 addr2;
+		} __attribute__ ((__packed__)) entry[NR_SHADOW_LOG_ENTIRES];
+	};
 } ____cacheline_aligned_in_smp;
 
 #define IO_MD_OFF      (PAGE_SIZE - SKB_DATA_ALIGN(sizeof(struct io_md)))
-#define SHADOW_OFF     (IO_MD_OFF - SKB_DATA_ALIGN(sizeof(struct skb_shared_info)) \
-                                       - SKB_DATA_ALIGN(sizeof(union shadow_state)))
+#define SHADOW_OFF     (IO_MD_OFF - SKB_DATA_ALIGN(sizeof(struct shadow_state)))
 struct page_priv_ctx {
 	struct ubuf_info	ubuf[PAGES_IN_HUGE];
 };
