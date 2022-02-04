@@ -1262,14 +1262,13 @@ static void maio_zc_tx_callback(struct ubuf_info *ubuf, bool zc_success)
 	maio_trace_page_rc(page, MAIO_PAGE_RC_COMP);
 
 	if (refcount_dec_and_test(&ubuf->refcnt)) {
-		struct io_md *tmp_md = ubuf->ctx;
+		struct io_md *tmp_md = md;
 		void *kaddr = NULL;
 		int i = 0;
 
 		while (page) {
 			set_page_state(page, MAIO_PAGE_USER);
 			trace_printk("%s[%d]) %llx\n", __FUNCTION__,i, (u64)kaddr);
-
 			kaddr = (tmp_md->next_frag) ? uaddr2addr(tmp_md->next_frag) : NULL;
 			if (kaddr) {
 				tmp_md = virt2io_md(kaddr);
@@ -1404,6 +1403,7 @@ static inline void collect_refill_page(struct page *page, void *kaddr)
 static inline void *common_egress_handling(void *kaddr, struct page *page, u64 uaddr)
 {
 	struct io_md *md = NULL;
+	struct io_md *rc = virt2io_md(kaddr);
 
 	do {
 		if (unlikely(IS_ERR_OR_NULL(kaddr))) {
@@ -1509,7 +1509,8 @@ static inline void *common_egress_handling(void *kaddr, struct page *page, u64 u
 			page = virt_to_page(kaddr);
 		}
 	} while (kaddr);
-	return md;
+
+	return rc;
 }
 
 static inline void maio_free_skb_batch(struct sk_buff **skb, int cnt)
