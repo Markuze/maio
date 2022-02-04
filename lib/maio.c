@@ -1536,8 +1536,10 @@ static inline int maio_skb_add_frags(struct sk_buff *skb, char *kaddr)
 	if (unlikely(md->len > MAIO_TX_SKB_SIZE)) {
 		kaddr 	+= MAIO_TX_SKB_SIZE;
 		md->len -= MAIO_TX_SKB_SIZE;
-	 } else
+	 } else {
 		kaddr = (md->next_frag) ? uaddr2addr(md->next_frag) : NULL;
+		set_page_state(virt_to_page(kaddr), MAIO_PAGE_TX);
+	}
 	trace_debug("kaddr %llx [%d]\n", (u64)kaddr, md->len);
 	while (kaddr) {
 		struct page *page = virt_to_page(kaddr);
