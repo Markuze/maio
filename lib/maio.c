@@ -277,7 +277,7 @@ static inline void trace_page_state(struct page *page)
 
 static inline void dump_page_rc(struct page *page)
 {
-	union shadow_state	*shadow = page2shadow(page);
+	struct shadow_state	*shadow = page2shadow(page);
 	struct io_md		*md = page2io_md(page);
 
 	u32 idx	= atomic_read(&md->idx);
@@ -296,9 +296,9 @@ static inline void dump_page_rc(struct page *page)
 
 		pr_err("%-2d:%-2d:%-2d [0x%x]:%ps:..%ps\n",
 				idx,
-				shadow->entry[idx].core,
-				(shadow->entry[idx].rc)& 0x3,
-				(shadow->entry[idx].rc)>>2,
+				shadow->entry[idx].core_rc >> 3,
+				shadow->entry[idx].core_rc & 0x7,
+				shadow->entry[idx].mark,
 				(void *)shadow->entry[idx].addr,
 				(void *)shadow->entry[idx].addr2);
 /*
@@ -513,7 +513,7 @@ static inline void __maio_free(struct page *page, void *addr)
 
 		set_page_state(page, MAIO_PAGE_USER);
 		init_page_count(page);
-		maio_trace_page_rc(page, (0xF1<<2));
+		maio_trace_page_rc(page, (0xF1));
 		return;
 	}
 	if (unlikely(virt2io_md(addr)->state == MAIO_PAGE_TX)) {
@@ -532,16 +532,16 @@ static inline void __maio_free(struct page *page, void *addr)
 	__maio_free_elem(addr, get_maio_elem_order(page));
 }
 
-void maio_trace_page_rc(struct page *page, int i)
+void maio_trace_page_rc(struct page *page, int mark)
 {
-	union shadow_state	*shadow = page2shadow(page);
+	struct shadow_state	*shadow = page2shadow(page);
 	struct io_md		*md = page2io_md(page);
 
 	u64 idx	= atomic_inc_return(&md->idx);
 	idx = (idx -1) & (NR_SHADOW_LOG_ENTIRES -1);
 
-	shadow->entry[idx].core  	= smp_processor_id();
-	shadow->entry[idx].rc		= i | page_ref_count(page);
+	shadow->entry[idx].core_rc  	= (smp_processor_id()<<3)|page_ref_count(page);
+	shadow->entry[idx].mark		= mark;
 	shadow->entry[idx].addr		=(u64)__builtin_return_address(1);
 	shadow->entry[idx].addr2	=(u64)__builtin_return_address(4);
 
@@ -965,6 +965,7 @@ static inline int __maio_post_rx_page(struct net_device *netdev, struct page *pa
 
 		if (head_cache_size) {
 			page = maio_get_cached_head();
+			maio_trace_page_rc(page, MAIO_PAGE_RC_ALLOC_HEAD);
 		}
 
 		if (!page)
@@ -1013,11 +1014,12 @@ static inline int __maio_post_rx_page(struct net_device *netdev, struct page *pa
 	show_io(addr, "RX");
 #if 1
 	smp_wmb();
-	post_rx_ring(qp, addr2uaddr(addr));
-	trace_debug("%d:RX %s:%llx[%u]%llx{%d}\n", smp_processor_id(),
+	trace_debug("%d:RX %s:k %llx[%u]u %llx p %llx{%d}\n", smp_processor_id(),
 			page ? "COPY" : "ZC",
 			(u64)addr, len,
-			addr2uaddr(addr), page_ref_count(page));
+			addr2uaddr(addr), (u64)page, page_ref_count(page));
+
+	post_rx_ring(qp, addr2uaddr(addr));
 #else
 /***************
 	Testing NAPI code:
@@ -1104,7 +1106,7 @@ int maio_xmit(struct net_device *dev, struct sk_buff **skb, int cnt)
 		if (!dev_xmit_complete(err)) {
 			const skb_frag_t *frag = &skb_shinfo(skb[i])->frags[0];
 			inc_err(MAIO_ERR_TX_ERR_NETDEV);
-			maio_trace_page_rc(frag->bv_page, (0xFF<<2));
+			maio_trace_page_rc(frag->bv_page, (0xFF));
 			consume_skb(skb[i]);
 		}
 	}
@@ -1258,7 +1260,23 @@ static void maio_zc_tx_callback(struct ubuf_info *ubuf, bool zc_success)
 	maio_trace_page_rc(page, MAIO_PAGE_RC_COMP);
 
 	if (refcount_dec_and_test(&ubuf->refcnt)) {
-		set_page_state(page, MAIO_PAGE_USER);
+		struct io_md *tmp_md = md;
+		void *kaddr = NULL;
+		int i = 0;
+
+		//dump_page_rc(page);
+		while (page) {
+			set_page_state(page, MAIO_PAGE_USER);
+			trace_debug("%s[%d]) %llx\n", __FUNCTION__,i, (u64)kaddr);
+			kaddr = (tmp_md->next_frag) ? uaddr2addr(tmp_md->next_frag) : NULL;
+			if (kaddr) {
+				tmp_md = virt2io_md(kaddr);
+				page = virt_to_page(kaddr);
+				++i;
+			} else {
+				page = NULL;
+			}
+		}
 		inc_err(MAIO_ERR_TX_COMP);
 		in_transit = 0;
 	//	assert(get_err(MAIO_ERR_TX_COMP) <= get_err(MAIO_ERR_TX_START) + get_err(MAIO_ERR_NAPI));
@@ -1383,113 +1401,122 @@ static inline void collect_refill_page(struct page *page, void *kaddr)
 
 static inline void *common_egress_handling(void *kaddr, struct page *page, u64 uaddr)
 {
-	unsigned len;
 	struct io_md *md = NULL;
+	struct io_md *rc = virt2io_md(kaddr);
 
-	if (unlikely(IS_ERR_OR_NULL(kaddr))) {
-		trace_printk("Invalid kaddr %llx from user %llx\n", (u64)kaddr, (u64)uaddr);
-		pr_err("Invalid kaddr %llx from user %llx\n", (u64)kaddr, (u64)uaddr);
-		return NULL;
-	}
-
-	if (unlikely( ! page_ref_count(page))) {
-		/* This check only makes sense if pages are zeroed out (?) */
-		if (unlikely(get_page_state(page))) {
-			md = virt2io_md(kaddr);
-
-			pr_err("%ps] Zero refcount page %llx(state %llx [%u]<%llx>[%u] )[%d] addr %llx"
-				"%ps] transit %d transitcnt %u [%d/%d]\n",
-				__builtin_return_address(0),
-				(u64)page, get_page_state(page), md->line,
-				md->prev_state, md->prev_line, page_ref_count(page), (u64)kaddr,
-				__builtin_return_address(0),
-				md->in_transit, md->in_transit_dbg, md->tx_cnt, md->tx_compl);
-			panic("Illegal page state\n");
-		}
-		init_page_count(page);
-	}
-
-	md = virt2io_md(kaddr);
-
-	if (unlikely(!is_maio_page(page))) {
-
-		if (!PageHead(page)) {
-			pr_err("This shit cant happen!\n"); //uaddr2addr would fail first
+	do {
+		if (unlikely(IS_ERR_OR_NULL(kaddr))) {
+			trace_printk("Invalid kaddr %llx from user %llx\n", (u64)kaddr, (u64)uaddr);
+			pr_err("Invalid kaddr %llx from user %llx\n", (u64)kaddr, (u64)uaddr);
 			return NULL;
 		}
-#if 0
-		else {
-			trace_printk("%s with HeadPage\n", __FUNCTION__);
-# Now with zc-callback we dont care about HeadPages on TX.
-			void *buff;
 
-			//set_maio_is_io(page);
-			set_page_state(page, MAIO_PAGE_HEAD); // Need to add on NEW USER pages.
+		if (unlikely( ! page_ref_count(page))) {
+			/* This check only makes sense if pages are zeroed out (?) */
+			if (unlikely(get_page_state(page))) {
+				md = virt2io_md(kaddr);
 
-			/* Head Pages cant be used for refill */
-			if (!md->len)
-				return NULL;
-
-			page = __maio_alloc_page();
-			if (!page)
-				return NULL;
-			buff = page_address(page);
-
-			buff = (void *)((u64)buff + maio_get_page_headroom(NULL));
-
-			md = virt2io_md(kaddr);
-
-			len = md->len;
-
-			trace_debug("%ps] :COPY %u [%u] to page %llx[%d] addr %llx\n",
+				pr_err("%ps] Zero refcount page %llx(state %llx [%u]<%llx>[%u] )[%d] addr %llx"
+					"%ps] transit %d transitcnt %u [%d/%d]\n",
 					__builtin_return_address(0),
-					len, maio_get_page_headroom(NULL),
-					(u64)page, page_ref_count(page), (u64)kaddr);
-			assert(len <= (PAGE_SIZE - maio_get_page_headroom(NULL)));
+					(u64)page, get_page_state(page), md->line,
+					md->prev_state, md->prev_line, page_ref_count(page), (u64)kaddr,
+					__builtin_return_address(0),
+					md->in_transit, md->in_transit_dbg, md->tx_cnt, md->tx_compl);
+				panic("Illegal page state\n");
+			}
+			init_page_count(page);
+		}
 
-			memcpy(buff, kaddr, len);
-			memcpy(virt2io_md(buff), md, sizeof(struct io_md));
-			/* For the assert */
-			set_page_state(page, MAIO_PAGE_USER);
+		md = virt2io_md(kaddr);
 
-			kaddr = buff;
-		} else {
+		if (unlikely(!is_maio_page(page))) {
+
+			if (!PageHead(page)) {
+				pr_err("This shit cant happen!\n"); //uaddr2addr would fail first
+				return NULL;
+			}
+#if 0
+			else {
+				trace_printk("%s with HeadPage\n", __FUNCTION__);
+	# Now with zc-callback we dont care about HeadPages on TX.
+				void *buff;
+
+				//set_maio_is_io(page);
+				set_page_state(page, MAIO_PAGE_HEAD); // Need to add on NEW USER pages.
+
+				/* Head Pages cant be used for refill */
+				if (!md->len)
+					return NULL;
+
+				page = __maio_alloc_page();
+				if (!page)
+					return NULL;
+				buff = page_address(page);
+
+				buff = (void *)((u64)buff + maio_get_page_headroom(NULL));
+
+				md = virt2io_md(kaddr);
+
+				len = md->len;
+
+				trace_debug("%ps] :COPY %u [%u] to page %llx[%d] addr %llx\n",
+						__builtin_return_address(0),
+						len, maio_get_page_headroom(NULL),
+						(u64)page, page_ref_count(page), (u64)kaddr);
+				assert(len <= (PAGE_SIZE - maio_get_page_headroom(NULL)));
+
+				memcpy(buff, kaddr, len);
+				memcpy(virt2io_md(buff), md, sizeof(struct io_md));
+				/* For the assert */
+				set_page_state(page, MAIO_PAGE_USER);
+
+				kaddr = buff;
+			} else {
 #endif
-	}
+		}
 
-	if (unlikely(md->poison != MAIO_POISON)) {
-		pr_err("NO MAIO-POISON <%x>Found [%llx] -- Please make sure to put the buffer\n"
-			"page %llx: %s:%s %llx ",
-			md->poison, uaddr, (u64)page,
-			is_maio_page(page)?"MAIO":"OTHER",
-			PageHead(page)?"HEAD":"Tail",
-			get_maio_uaddr(page));
+		if (unlikely(md->poison != MAIO_POISON)) {
+			pr_err("NO MAIO-POISON <%x>Found [%llx] -- Please make sure to put the buffer\n"
+				"page %llx: %s:%s %llx ",
+				md->poison, uaddr, (u64)page,
+				is_maio_page(page)?"MAIO":"OTHER",
+				PageHead(page)?"HEAD":"Tail",
+				get_maio_uaddr(page));
 
-		panic("This should not happen\n");
-		return NULL;
-	}
+			panic("This should not happen\n");
+			return NULL;
+		}
 
-//TODO: Consider adding ERR flags to ring entry.
+	//TODO: Consider adding ERR flags to ring entry.
+#if  0
+		len 	= md->len + SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
 
-	len 	= md->len + SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
+		trace_debug("%ps %llx/%llx [%d]from user %llx [#%d]\n",
+				__builtin_return_address(0),
+				(u64)kaddr, (u64)page, page_ref_count(page),
+				(u64)uaddr, cnt);
 
-	trace_debug("%ps %llx/%llx [%d]from user %llx [#%d]\n",
-			__builtin_return_address(0),
-			(u64)kaddr, (u64)page, page_ref_count(page),
-			(u64)uaddr, cnt);
+		if (unlikely(((uaddr & (~PAGE_MASK)) + len) > PAGE_SIZE)) {
+			pr_err("Buffer to Long [%llx] len %u klen = %u\n", uaddr, md->len, len);
+			return NULL;
+		}
+#endif
+		kaddr = (md->next_frag) ? uaddr2addr(md->next_frag) : NULL;
+		if (kaddr) {
+			uaddr = md->next_frag;
+			page = virt_to_page(kaddr);
+		}
+	} while (kaddr);
 
-	if (unlikely(((uaddr & (~PAGE_MASK)) + len) > PAGE_SIZE)) {
-		pr_err("Buffer to Long [%llx] len %u klen = %u\n", uaddr, md->len, len);
-		return NULL;
-	}
-	return md;
+	return rc;
 }
 
 static inline void maio_free_skb_batch(struct sk_buff **skb, int cnt)
 {
 	while (cnt--) {
 		const skb_frag_t *frag = &skb_shinfo(*skb)->frags[0];
-		maio_trace_page_rc(frag->bv_page, (0xFE<<2));
+		maio_trace_page_rc(frag->bv_page, (0xFE));
 		consume_skb(*skb);
 		++skb;
 	}
@@ -1502,18 +1529,24 @@ static inline int maio_skb_add_frags(struct sk_buff *skb, char *kaddr)
 	int len = __min(MAIO_TX_SKB_SIZE, md->len);
 	int nr_frags = 0;
 
+	trace_printk("TX] kaddr %llx uaddr %llx [%d/%d]\n", (u64)kaddr, addr2uaddr(kaddr), md->len, MAIO_TX_SKB_SIZE);
+
 	memcpy(skb->data, kaddr, len);
 	skb_put(skb, len);
 
 	if (unlikely(md->len > MAIO_TX_SKB_SIZE)) {
 		kaddr 	+= MAIO_TX_SKB_SIZE;
 		md->len -= MAIO_TX_SKB_SIZE;
-	 } else
+	 } else {
+		set_page_state(virt_to_page(kaddr), MAIO_PAGE_TX);
 		kaddr = (md->next_frag) ? uaddr2addr(md->next_frag) : NULL;
-
+	}
 	while (kaddr) {
 		struct page *page = virt_to_page(kaddr);
 		size_t offset = ((u64)kaddr & (~PAGE_MASK));
+
+		maio_trace_page_rc(page, MAIO_PAGE_RC_TX_FRAG);
+		set_page_state(page, MAIO_PAGE_TX);
 
 		/*TODO: Leaking skb */
 		if (unlikely(nr_frags >= MAX_SKB_FRAGS)) {
@@ -1530,8 +1563,7 @@ static inline int maio_skb_add_frags(struct sk_buff *skb, char *kaddr)
 		skb->truesize += md->len;
 		skb->len += md->len;
 		++nr_frags;
-		if (nr_frags > 1)
-			trace_printk("Ehh? %d %llx\n", nr_frags, (u64)page);
+		trace_printk("%s[%d] %llx :: %llx\n",__FUNCTION__, nr_frags, md->next_frag, (u64)page);
 
 		kaddr = (md->next_frag) ? uaddr2addr(md->next_frag) : NULL;
 	};
@@ -1591,7 +1623,6 @@ int maio_post_tx_page(void *state)
 		if (likely(maio_set_comp_handler(skb, md))) {
 			skb_batch[cnt++] = skb;
 			maio_skb_get(skb);
-			set_page_state(page, MAIO_PAGE_TX);
 			inc_err(MAIO_ERR_TX_START);
 		} else {
 			pr_err("ubuf_info alloc failure");
@@ -1829,6 +1860,21 @@ static int maio_post_napi_page(struct maio_tx_thread *tx_thread/*, struct napi_s
 			continue;
 		}
 
+		skb = maio_alloc_skb(tx_thread->netdev); //kaddr, md->len);
+		if (unlikely(!skb)) {
+			pr_err("%s) Failed to alloc skb\n", __FUNCTION__);
+			inc_err(MAIO_ERR_TX_ERR);
+			advance_tx_ring(tx_thread);
+			continue;
+		}
+
+		if (maio_skb_add_frags(skb, kaddr)) {
+			pr_err("%s) Failed to add frags\n", __FUNCTION__);
+			inc_err(MAIO_ERR_TX_FRAG_ERR);
+			advance_tx_ring(tx_thread);
+			continue;
+		}
+/*
 		skb = maio_build_linear_rx_skb(tx_thread->netdev, kaddr, md->len);
 		if (unlikely(!skb)) {
 			inc_err(MAIO_ERR_TX_ERR);
@@ -1837,6 +1883,13 @@ static int maio_post_napi_page(struct maio_tx_thread *tx_thread/*, struct napi_s
 			advance_tx_ring(tx_thread);
 			continue;
 		}
+*/
+		skb->mac_len = ETH_HLEN;
+
+		//skb_record_rx_queue(skb, 0);
+		skb->protocol = eth_type_trans(skb, tx_thread->netdev);
+		skb->ip_summed = CHECKSUM_UNNECESSARY;
+
 		cnt++;
 		//TODO: set completion handler.
 		if (likely(maio_set_comp_handler(skb, md))) {
