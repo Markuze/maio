@@ -1390,102 +1390,110 @@ static inline void *common_egress_handling(void *kaddr, struct page *page, u64 u
 	unsigned len;
 	struct io_md *md = NULL;
 
-	if (unlikely(IS_ERR_OR_NULL(kaddr))) {
-		trace_printk("Invalid kaddr %llx from user %llx\n", (u64)kaddr, (u64)uaddr);
-		pr_err("Invalid kaddr %llx from user %llx\n", (u64)kaddr, (u64)uaddr);
-		return NULL;
-	}
-
-	if (unlikely( ! page_ref_count(page))) {
-		/* This check only makes sense if pages are zeroed out (?) */
-		if (unlikely(get_page_state(page))) {
-			md = virt2io_md(kaddr);
-
-			pr_err("%ps] Zero refcount page %llx(state %llx [%u]<%llx>[%u] )[%d] addr %llx"
-				"%ps] transit %d transitcnt %u [%d/%d]\n",
-				__builtin_return_address(0),
-				(u64)page, get_page_state(page), md->line,
-				md->prev_state, md->prev_line, page_ref_count(page), (u64)kaddr,
-				__builtin_return_address(0),
-				md->in_transit, md->in_transit_dbg, md->tx_cnt, md->tx_compl);
-			panic("Illegal page state\n");
-		}
-		init_page_count(page);
-	}
-
-	md = virt2io_md(kaddr);
-
-	if (unlikely(!is_maio_page(page))) {
-
-		if (!PageHead(page)) {
-			pr_err("This shit cant happen!\n"); //uaddr2addr would fail first
+	do {
+		if (unlikely(IS_ERR_OR_NULL(kaddr))) {
+			trace_printk("Invalid kaddr %llx from user %llx\n", (u64)kaddr, (u64)uaddr);
+			pr_err("Invalid kaddr %llx from user %llx\n", (u64)kaddr, (u64)uaddr);
 			return NULL;
 		}
-#if 0
-		else {
-			trace_printk("%s with HeadPage\n", __FUNCTION__);
-# Now with zc-callback we dont care about HeadPages on TX.
-			void *buff;
 
-			//set_maio_is_io(page);
-			set_page_state(page, MAIO_PAGE_HEAD); // Need to add on NEW USER pages.
+		if (unlikely( ! page_ref_count(page))) {
+			/* This check only makes sense if pages are zeroed out (?) */
+			if (unlikely(get_page_state(page))) {
+				md = virt2io_md(kaddr);
 
-			/* Head Pages cant be used for refill */
-			if (!md->len)
-				return NULL;
-
-			page = __maio_alloc_page();
-			if (!page)
-				return NULL;
-			buff = page_address(page);
-
-			buff = (void *)((u64)buff + maio_get_page_headroom(NULL));
-
-			md = virt2io_md(kaddr);
-
-			len = md->len;
-
-			trace_debug("%ps] :COPY %u [%u] to page %llx[%d] addr %llx\n",
+				pr_err("%ps] Zero refcount page %llx(state %llx [%u]<%llx>[%u] )[%d] addr %llx"
+					"%ps] transit %d transitcnt %u [%d/%d]\n",
 					__builtin_return_address(0),
-					len, maio_get_page_headroom(NULL),
-					(u64)page, page_ref_count(page), (u64)kaddr);
-			assert(len <= (PAGE_SIZE - maio_get_page_headroom(NULL)));
+					(u64)page, get_page_state(page), md->line,
+					md->prev_state, md->prev_line, page_ref_count(page), (u64)kaddr,
+					__builtin_return_address(0),
+					md->in_transit, md->in_transit_dbg, md->tx_cnt, md->tx_compl);
+				panic("Illegal page state\n");
+			}
+			init_page_count(page);
+		}
 
-			memcpy(buff, kaddr, len);
-			memcpy(virt2io_md(buff), md, sizeof(struct io_md));
-			/* For the assert */
-			set_page_state(page, MAIO_PAGE_USER);
+		md = virt2io_md(kaddr);
 
-			kaddr = buff;
-		} else {
+		if (unlikely(!is_maio_page(page))) {
+
+			if (!PageHead(page)) {
+				pr_err("This shit cant happen!\n"); //uaddr2addr would fail first
+				return NULL;
+			}
+#if 0
+			else {
+				trace_printk("%s with HeadPage\n", __FUNCTION__);
+	# Now with zc-callback we dont care about HeadPages on TX.
+				void *buff;
+
+				//set_maio_is_io(page);
+				set_page_state(page, MAIO_PAGE_HEAD); // Need to add on NEW USER pages.
+
+				/* Head Pages cant be used for refill */
+				if (!md->len)
+					return NULL;
+
+				page = __maio_alloc_page();
+				if (!page)
+					return NULL;
+				buff = page_address(page);
+
+				buff = (void *)((u64)buff + maio_get_page_headroom(NULL));
+
+				md = virt2io_md(kaddr);
+
+				len = md->len;
+
+				trace_debug("%ps] :COPY %u [%u] to page %llx[%d] addr %llx\n",
+						__builtin_return_address(0),
+						len, maio_get_page_headroom(NULL),
+						(u64)page, page_ref_count(page), (u64)kaddr);
+				assert(len <= (PAGE_SIZE - maio_get_page_headroom(NULL)));
+
+				memcpy(buff, kaddr, len);
+				memcpy(virt2io_md(buff), md, sizeof(struct io_md));
+				/* For the assert */
+				set_page_state(page, MAIO_PAGE_USER);
+
+				kaddr = buff;
+			} else {
 #endif
-	}
+		}
 
-	if (unlikely(md->poison != MAIO_POISON)) {
-		pr_err("NO MAIO-POISON <%x>Found [%llx] -- Please make sure to put the buffer\n"
-			"page %llx: %s:%s %llx ",
-			md->poison, uaddr, (u64)page,
-			is_maio_page(page)?"MAIO":"OTHER",
-			PageHead(page)?"HEAD":"Tail",
-			get_maio_uaddr(page));
+		if (unlikely(md->poison != MAIO_POISON)) {
+			pr_err("NO MAIO-POISON <%x>Found [%llx] -- Please make sure to put the buffer\n"
+				"page %llx: %s:%s %llx ",
+				md->poison, uaddr, (u64)page,
+				is_maio_page(page)?"MAIO":"OTHER",
+				PageHead(page)?"HEAD":"Tail",
+				get_maio_uaddr(page));
 
-		panic("This should not happen\n");
-		return NULL;
-	}
+			panic("This should not happen\n");
+			return NULL;
+		}
 
-//TODO: Consider adding ERR flags to ring entry.
+	//TODO: Consider adding ERR flags to ring entry.
+#if  0
+		len 	= md->len + SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
 
-	len 	= md->len + SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
+		trace_debug("%ps %llx/%llx [%d]from user %llx [#%d]\n",
+				__builtin_return_address(0),
+				(u64)kaddr, (u64)page, page_ref_count(page),
+				(u64)uaddr, cnt);
 
-	trace_debug("%ps %llx/%llx [%d]from user %llx [#%d]\n",
-			__builtin_return_address(0),
-			(u64)kaddr, (u64)page, page_ref_count(page),
-			(u64)uaddr, cnt);
-
-	if (unlikely(((uaddr & (~PAGE_MASK)) + len) > PAGE_SIZE)) {
-		pr_err("Buffer to Long [%llx] len %u klen = %u\n", uaddr, md->len, len);
-		return NULL;
-	}
+		if (unlikely(((uaddr & (~PAGE_MASK)) + len) > PAGE_SIZE)) {
+			pr_err("Buffer to Long [%llx] len %u klen = %u\n", uaddr, md->len, len);
+			return NULL;
+		}
+#endif
+		kaddr = (md->next_frag) ? uaddr2addr(md->next_frag) : NULL;
+		if (kaddr) {
+			uaddr = md->next_frag;
+			page = virt_to_page(kaddr);
+		}
+	} while (kaddr);
 	return md;
 }
 
@@ -1514,10 +1522,12 @@ static inline int maio_skb_add_frags(struct sk_buff *skb, char *kaddr)
 		md->len -= MAIO_TX_SKB_SIZE;
 	 } else
 		kaddr = (md->next_frag) ? uaddr2addr(md->next_frag) : NULL;
-
+	trace_printk("kaddr %llx [%d]\n", (u64)kaddr, md->len);
 	while (kaddr) {
 		struct page *page = virt_to_page(kaddr);
 		size_t offset = ((u64)kaddr & (~PAGE_MASK));
+
+		set_page_state(page, MAIO_PAGE_TX);
 
 		/*TODO: Leaking skb */
 		if (unlikely(nr_frags >= MAX_SKB_FRAGS)) {
@@ -1534,8 +1544,7 @@ static inline int maio_skb_add_frags(struct sk_buff *skb, char *kaddr)
 		skb->truesize += md->len;
 		skb->len += md->len;
 		++nr_frags;
-		if (nr_frags > 1)
-			trace_printk("Ehh? %d %llx\n", nr_frags, (u64)page);
+		trace_printk("%s[%d] %llx :: %llx\n",__FUNCTION__, nr_frags, md->next_frag, (u64)page);
 
 		kaddr = (md->next_frag) ? uaddr2addr(md->next_frag) : NULL;
 	};
@@ -1595,7 +1604,6 @@ int maio_post_tx_page(void *state)
 		if (likely(maio_set_comp_handler(skb, md))) {
 			skb_batch[cnt++] = skb;
 			maio_skb_get(skb);
-			set_page_state(page, MAIO_PAGE_TX);
 			inc_err(MAIO_ERR_TX_START);
 		} else {
 			pr_err("ubuf_info alloc failure");
