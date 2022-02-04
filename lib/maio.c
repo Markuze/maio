@@ -1268,7 +1268,7 @@ static void maio_zc_tx_callback(struct ubuf_info *ubuf, bool zc_success)
 
 		while (page) {
 			set_page_state(page, MAIO_PAGE_USER);
-			trace_printk("%s[%d]) %llx\n", __FUNCTION__,i, (u64)kaddr);
+			trace_debug("%s[%d]) %llx\n", __FUNCTION__,i, (u64)kaddr);
 			kaddr = (tmp_md->next_frag) ? uaddr2addr(tmp_md->next_frag) : NULL;
 			if (kaddr) {
 				tmp_md = virt2io_md(kaddr);
@@ -1538,7 +1538,7 @@ static inline int maio_skb_add_frags(struct sk_buff *skb, char *kaddr)
 		md->len -= MAIO_TX_SKB_SIZE;
 	 } else
 		kaddr = (md->next_frag) ? uaddr2addr(md->next_frag) : NULL;
-	trace_printk("kaddr %llx [%d]\n", (u64)kaddr, md->len);
+	trace_debug("kaddr %llx [%d]\n", (u64)kaddr, md->len);
 	while (kaddr) {
 		struct page *page = virt_to_page(kaddr);
 		size_t offset = ((u64)kaddr & (~PAGE_MASK));
@@ -1560,7 +1560,7 @@ static inline int maio_skb_add_frags(struct sk_buff *skb, char *kaddr)
 		skb->truesize += md->len;
 		skb->len += md->len;
 		++nr_frags;
-		trace_printk("%s[%d] %llx :: %llx\n",__FUNCTION__, nr_frags, md->next_frag, (u64)page);
+		trace_debug("%s[%d] %llx :: %llx\n",__FUNCTION__, nr_frags, md->next_frag, (u64)page);
 
 		kaddr = (md->next_frag) ? uaddr2addr(md->next_frag) : NULL;
 	};
