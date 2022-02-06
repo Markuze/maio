@@ -140,8 +140,8 @@ struct io_md {
 union shadow_state {
 	u8 __size[320];
 	struct {
-		u8 core;
-		u8 rc;
+		u8 core_rc;
+		u8 mark;
 		u16 unused;
 		u64 addr;
 		u64 addr2;
