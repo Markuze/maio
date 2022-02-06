@@ -277,7 +277,7 @@ static inline void trace_page_state(struct page *page)
 
 static inline void dump_page_rc(struct page *page)
 {
-	union shadow_state	*shadow = page2shadow(page);
+	struct shadow_state	*shadow = page2shadow(page);
 	struct io_md		*md = page2io_md(page);
 
 	u32 idx	= atomic_read(&md->idx);
@@ -534,7 +534,7 @@ static inline void __maio_free(struct page *page, void *addr)
 
 void maio_trace_page_rc(struct page *page, int mark)
 {
-	union shadow_state	*shadow = page2shadow(page);
+	struct shadow_state	*shadow = page2shadow(page);
 	struct io_md		*md = page2io_md(page);
 
 	u64 idx	= atomic_inc_return(&md->idx);
@@ -1533,7 +1533,7 @@ static inline int maio_skb_add_frags(struct sk_buff *skb, char *kaddr)
 	int len = __min(MAIO_TX_SKB_SIZE, md->len);
 	int nr_frags = 0;
 
-	trace_printk("TX] kaddr %llx [%d/%d]\n", (u64)kaddr, md->len, MAIO_TX_SKB_SIZE);
+	trace_printk("TX] kaddr %llx uaddr %llx [%d/%d]\n", (u64)kaddr, addr2uaddr(kaddr), md->len, MAIO_TX_SKB_SIZE);
 
 	memcpy(skb->data, kaddr, len);
 	skb_put(skb, len);
