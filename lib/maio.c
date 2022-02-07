@@ -885,8 +885,6 @@ static inline void collect_rx_refill_page(u64 addr)
 		if (likely(rc)) {
 			if (likely(put_page_testzero(page)))
 				maio_page_free(page);
-			else
-				dump_page_state(page);
 		} else {
 			inc_err(MAIO_ERR_REFILL_NEW);
 			set_page_state(page, MAIO_PAGE_FREE);
