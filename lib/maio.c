@@ -1160,8 +1160,6 @@ void maio_skb_free(struct sk_buff *skb)
 {
 	static int verbose;
 
-	if (unlikely(!verbose++))
-		trace_printk("%s!! [0x%x] \n", __FUNCTION__, skb->mark);
 	maio_skb_put(skb);
 }
 
