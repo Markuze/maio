@@ -1529,7 +1529,7 @@ static inline int maio_skb_add_frags(struct sk_buff *skb, char *kaddr)
 	int len = __min(MAIO_TX_SKB_SIZE, md->len);
 	int nr_frags = 0;
 
-	trace_printk("TX] kaddr %llx uaddr %llx [%d/%d]\n", (u64)kaddr, addr2uaddr(kaddr), md->len, MAIO_TX_SKB_SIZE);
+	trace_debug("TX] kaddr %llx uaddr %llx [%d/%d]\n", (u64)kaddr, addr2uaddr(kaddr), md->len, MAIO_TX_SKB_SIZE);
 
 	memcpy(skb->data, kaddr, len);
 	skb_put(skb, len);
@@ -1563,7 +1563,7 @@ static inline int maio_skb_add_frags(struct sk_buff *skb, char *kaddr)
 		skb->truesize += md->len;
 		skb->len += md->len;
 		++nr_frags;
-		trace_printk("%s[%d] %llx :: %llx\n",__FUNCTION__, nr_frags, md->next_frag, (u64)page);
+		trace_debug("%s[%d] %llx :: %llx\n",__FUNCTION__, nr_frags, md->next_frag, (u64)page);
 
 		kaddr = (md->next_frag) ? uaddr2addr(md->next_frag) : NULL;
 	};
@@ -1891,7 +1891,6 @@ static int maio_post_napi_page(struct maio_tx_thread *tx_thread/*, struct napi_s
 		skb->ip_summed = CHECKSUM_UNNECESSARY;
 
 		cnt++;
-		//TODO: set completion handler.
 		if (likely(maio_set_comp_handler(skb, md))) {
 			get_page(page);
 			set_page_state(page, MAIO_PAGE_NAPI);
@@ -1901,8 +1900,9 @@ static int maio_post_napi_page(struct maio_tx_thread *tx_thread/*, struct napi_s
 			inc_err(MAIO_ERR_TX_ERR);
 		}
 
-		//OPTION: Use non napi API: netif_rx but lose GRO.
 		netif_rx(skb);
+		//OPTION: Use NAPI API: and gain GRO etc..,
+		//Initial performance is poor - work is needed
 		//napi_gro_receive(napi, skb);
 
 		advance_tx_ring(tx_thread);
