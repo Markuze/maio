@@ -1160,7 +1160,7 @@ static inline void maio_skb_put(struct sk_buff *skb)
 
 void maio_skb_free(struct sk_buff *skb)
 {
-	static int verbose;
+	//static int verbose;
 
 	maio_skb_put(skb);
 }
@@ -1200,6 +1200,25 @@ static inline struct sk_buff *maio_alloc_skb(struct net_device *netdev)
 
 	skb->mark = MAIO_OWNED_SKB;
 	skb->destructor = maio_skb_free;
+	return skb;
+}
+
+static inline struct sk_buff *maio_prep_rx_skb(struct net_device *netdev, struct sk_buff *skb)
+{
+	if (unlikely(!skb))
+		return NULL;
+
+	trace_debug(">>> va %llx offset %llu size %lu shinfo %llx marker %llx [%lld]\n", (u64)va,
+			(u64)(va - page_address), size, (u64)skb_shinfo(skb), (u64)page2track(virt_to_page(va)),
+			(u64)skb_shinfo(skb) - (u64)page2track(virt_to_page(va)));
+
+	skb->mac_len = ETH_HLEN;
+
+	//skb_record_rx_queue(skb, 0);
+	skb->protocol = eth_type_trans(skb, netdev);
+	skb->ip_summed = CHECKSUM_UNNECESSARY;
+	skb->dev = netdev;
+
 	return skb;
 }
 
@@ -1252,7 +1271,10 @@ static void maio_zc_tx_callback(struct ubuf_info *ubuf, bool zc_success)
 	int in_transit = 1;
 
 	assert(get_maio_uaddr(page));
+
 	if (unlikely(!(get_page_state(page) & (MAIO_PAGE_TX|MAIO_PAGE_NAPI)))) {
+		pr_err("Bad State on %s [%llx]", __FUNCTION__, (u64)ubuf);
+		trace_printk("Bad State on %s [%llx]", __FUNCTION__, (u64)ubuf);
 		dump_page_state(page);
 	}
 	assert(get_page_state(page) & (MAIO_PAGE_TX|MAIO_PAGE_NAPI));
@@ -1261,13 +1283,13 @@ static void maio_zc_tx_callback(struct ubuf_info *ubuf, bool zc_success)
 
 	if (refcount_dec_and_test(&ubuf->refcnt)) {
 		struct io_md *tmp_md = md;
-		void *kaddr = NULL;
+		void *kaddr = md;
 		int i = 0;
 
 		//dump_page_rc(page);
 		while (page) {
 			set_page_state(page, MAIO_PAGE_USER);
-			trace_debug("%s[%d]) %llx\n", __FUNCTION__,i, (u64)kaddr);
+			trace_debug("%s[%d] %llx-> %llx\n", __FUNCTION__,i, (u64)page, (u64)kaddr);
 			kaddr = (tmp_md->next_frag) ? uaddr2addr(tmp_md->next_frag) : NULL;
 			if (kaddr) {
 				tmp_md = virt2io_md(kaddr);
@@ -1371,9 +1393,9 @@ static inline int maio_set_comp_handler(struct sk_buff *skb, struct io_md *md)
 	/* make sure the uarg is correct before its visible */
 	smp_wmb();
 # if 0
-	trace_printk("%s: %llx TX in_transit %s [%d]\n", __FUNCTION__, (u64)uarg,
+	trace_printk("%s: %llx , %llx TX in_transit %s [%d]\n", __FUNCTION__, (u64)uarg, (u64)md,
 			md->in_transit ? "YES": "NO", refcount_read(&uarg->refcnt));
-	trace_page_state(page);
+	//trace_page_state(page);
 #endif
 	skb_shinfo(skb)->tx_flags |= SKBTX_DEV_ZEROCOPY;
 	skb_shinfo(skb)->destructor_arg = uarg;
@@ -1523,7 +1545,7 @@ static inline void maio_free_skb_batch(struct sk_buff **skb, int cnt)
 }
 
 #define __min(a, b) ((a) < (b) ? (a) : (b))
-static inline int maio_skb_add_frags(struct sk_buff *skb, char *kaddr)
+static inline int maio_skb_add_frags(struct sk_buff *skb, char *kaddr, u64 state)
 {
 	struct io_md *md = virt2io_md(kaddr);
 	int len = __min(MAIO_TX_SKB_SIZE, md->len);
@@ -1534,11 +1556,11 @@ static inline int maio_skb_add_frags(struct sk_buff *skb, char *kaddr)
 	memcpy(skb->data, kaddr, len);
 	skb_put(skb, len);
 
-	if (unlikely(md->len > MAIO_TX_SKB_SIZE)) {
+	if (likely(md->len > MAIO_TX_SKB_SIZE)) {
 		kaddr 	+= MAIO_TX_SKB_SIZE;
 		md->len -= MAIO_TX_SKB_SIZE;
 	 } else {
-		set_page_state(virt_to_page(kaddr), MAIO_PAGE_TX);
+		set_page_state(virt_to_page(kaddr), state);
 		kaddr = (md->next_frag) ? uaddr2addr(md->next_frag) : NULL;
 	}
 	while (kaddr) {
@@ -1546,7 +1568,7 @@ static inline int maio_skb_add_frags(struct sk_buff *skb, char *kaddr)
 		size_t offset = ((u64)kaddr & (~PAGE_MASK));
 
 		maio_trace_page_rc(page, MAIO_PAGE_RC_TX_FRAG);
-		set_page_state(page, MAIO_PAGE_TX);
+		set_page_state(page, state);
 
 		/*TODO: Leaking skb */
 		if (unlikely(nr_frags >= MAX_SKB_FRAGS)) {
@@ -1609,7 +1631,7 @@ int maio_post_tx_page(void *state)
 			continue;
 		}
 
-		if (maio_skb_add_frags(skb, kaddr)) {
+		if (maio_skb_add_frags(skb, kaddr, MAIO_PAGE_NAPI)) {
 			pr_err("%s) Failed to add frags\n", __FUNCTION__);
 			inc_err(MAIO_ERR_TX_FRAG_ERR);
 			advance_tx_ring(tx_thread);
@@ -1859,7 +1881,7 @@ static int maio_post_napi_page(struct maio_tx_thread *tx_thread/*, struct napi_s
 			inc_err(MAIO_ERR_TX_ERR);
 			continue;
 		}
-
+#if 1
 		skb = maio_alloc_skb(tx_thread->netdev); //kaddr, md->len);
 		if (unlikely(!skb)) {
 			pr_err("%s) Failed to alloc skb\n", __FUNCTION__);
@@ -1868,13 +1890,14 @@ static int maio_post_napi_page(struct maio_tx_thread *tx_thread/*, struct napi_s
 			continue;
 		}
 
-		if (maio_skb_add_frags(skb, kaddr)) {
+		if (maio_skb_add_frags(skb, kaddr, MAIO_PAGE_TX)) {
 			pr_err("%s) Failed to add frags\n", __FUNCTION__);
 			inc_err(MAIO_ERR_TX_FRAG_ERR);
 			advance_tx_ring(tx_thread);
 			continue;
 		}
-/*
+		maio_prep_rx_skb(tx_thread->netdev, skb);
+#else
 		skb = maio_build_linear_rx_skb(tx_thread->netdev, kaddr, md->len);
 		if (unlikely(!skb)) {
 			inc_err(MAIO_ERR_TX_ERR);
@@ -1883,17 +1906,10 @@ static int maio_post_napi_page(struct maio_tx_thread *tx_thread/*, struct napi_s
 			advance_tx_ring(tx_thread);
 			continue;
 		}
-*/
-		skb->mac_len = ETH_HLEN;
-
-		//skb_record_rx_queue(skb, 0);
-		skb->protocol = eth_type_trans(skb, tx_thread->netdev);
-		skb->ip_summed = CHECKSUM_UNNECESSARY;
-
+#endif
 		cnt++;
 		if (likely(maio_set_comp_handler(skb, md))) {
-			get_page(page);
-			set_page_state(page, MAIO_PAGE_NAPI);
+			maio_skb_get(skb);
 			inc_err(MAIO_ERR_NAPI);
 		} else {
 			pr_err("Leaking a TX buffer due to ubuf_info alloc failure");//TODO: HAndle this
