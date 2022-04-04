@@ -259,20 +259,36 @@ static inline u64 get_page_state(struct page *page)
 	return md->state;
 }
 
-static inline void trace_page_state(struct page *page)
+
+static inline int common_page_state_dump(struct page *page, char *buf, size_t len)
 {
 	struct io_md *md = page2io_md(page);
+	int idx = 0, slen = 0;
 
-	trace_printk("ERROR: Page %llx state %llx uaddr %llx\n", (u64)page, get_page_state(page), get_maio_uaddr(page));
-	trace_printk("%d:%s:%llx :%s\n", smp_processor_id(), __FUNCTION__, (u64)page, PageHead(page)?"HEAD":"");
-	trace_printk("%ps] page %llx(state %llx [%u]<%llx>[%u] )[%d] addr %llx\n"
-		"%ps] transit %d transitcnt %u [%d/%d]\n",
+	slen = snprintf(&buf[idx], len, "ERROR: Page %llx state %llx uaddr %llx\n", (u64)page, get_page_state(page), get_maio_uaddr(page));
+	len -= slen;
+	idx += slen;
+	slen = snprintf(&buf[idx], len, "%d:%s:%llx :%s\n", smp_processor_id(), __FUNCTION__, (u64)page, PageHead(page)?"HEAD":"");
+	len -= slen;
+	idx += slen;
+	slen = snprintf(&buf[idx], len, "%ps] page %llx(state %llx [%u]<%llx>[%u] )[%d] addr %llx\n"
+		"%ps][%d/%d]\n",
 		__builtin_return_address(0),
 		(u64)page, get_page_state(page), md->line,
 		md->prev_state, md->prev_line, page_ref_count(page), (u64)page_address(page),
 		__builtin_return_address(0),
-		md->in_transit, md->in_transit_dbg, md->tx_cnt, md->tx_compl);
+		md->tx_id, md->nr_comp);
+	len -= slen;
+	idx += slen;
+	return idx;
+}
 
+static inline void trace_page_state(struct page *page)
+{
+	char buffer[512] = {0};
+
+	common_page_state_dump(page,buffer, 512);
+	trace_printk("%s", buffer);
 }
 
 static inline void dump_page_rc(struct page *page)
@@ -316,17 +332,11 @@ static inline void dump_page_rc(struct page *page)
 
 static inline void __dump_page_state(struct page *page, int line)
 {
-	struct io_md *md = page2io_md(page);
+	char buffer[512] = {0};
 
-	pr_err("ERROR[%d]: Page %llx state %llx uaddr %llx\n", line, (u64)page, get_page_state(page), get_maio_uaddr(page));
-	pr_err("%d:%s:%llx :%s\n", smp_processor_id(), __FUNCTION__, (u64)page, PageHead(page)?"HEAD":"");
-	pr_err("%ps] page %llx(state %llx [%u]<%llx>[%u] )[%d] addr %llx\n"
-		"%ps] transit %d transitcnt %u [%d/%d]\n",
-		__builtin_return_address(0),
-		(u64)page, get_page_state(page), md->line,
-		md->prev_state, md->prev_line, page_ref_count(page), (u64)page_address(page),
-		__builtin_return_address(0),
-		md->in_transit, md->in_transit_dbg, md->tx_cnt, md->tx_compl);
+	common_page_state_dump(page,buffer, 512);
+
+	pr_err("%s", buffer);
 
 	dump_page_rc(page);
 	dump_all_stats(NULL);
@@ -1281,7 +1291,6 @@ static void maio_zc_tx_callback(struct ubuf_info *ubuf, bool zc_success)
 {
 	struct io_md *md = ubuf->ctx;
 	struct page *page = virt_to_page(md);
-	int in_transit = 1;
 
 	assert(get_maio_uaddr(page));
 
@@ -1294,7 +1303,8 @@ static void maio_zc_tx_callback(struct ubuf_info *ubuf, bool zc_success)
 
 	maio_trace_page_rc(page, MAIO_PAGE_RC_COMP);
 
-	if (refcount_dec_and_test(&ubuf->refcnt)) {
+	if (likely(refcount_dec_and_test(&ubuf->refcnt))) {
+#if 0
 		struct io_md *tmp_md = md;
 		void *kaddr = md;
 		int i = 0;
@@ -1312,19 +1322,19 @@ static void maio_zc_tx_callback(struct ubuf_info *ubuf, bool zc_success)
 				page = NULL;
 			}
 		}
+#else
+		set_page_state(page, MAIO_PAGE_USER);
+		md->tx_id = 0;
+		smp_wmb();
+#endif
 		inc_err(MAIO_ERR_TX_COMP);
-		in_transit = 0;
 	//	assert(get_err(MAIO_ERR_TX_COMP) <= get_err(MAIO_ERR_TX_START) + get_err(MAIO_ERR_NAPI));
 	} else {
 		inc_err(MAIO_ERR_TX_COMP_TRANS);
 	}
 
 	last_comp = addr2uaddr(md);
-	md->in_transit = in_transit;
-	md->in_transit_dbg++;
-	//trace_printk("%s: %llx TX in_transit %s [%d]<%d>\n", __FUNCTION__, (u64)ubuf,
-	//		in_transit ? "YES": "NO", refcount_read(&ubuf->refcnt), md->in_transit_dbg);
-	//trace_page_state(page);
+	++md->nr_comp;
 }
 
 # if 0
@@ -1395,7 +1405,6 @@ static inline int maio_set_comp_handler(struct sk_buff *skb, struct io_md *md)
 	struct page *page = virt_to_page(md);
 	struct ubuf_info *uarg = get_maio_page_uarg(page);
 
-	md->in_transit		= 1;
 	uarg->callback		= maio_zc_tx_callback;
 	uarg->ctx 		= md;
 	/* ctx, and callback should always be the same */
@@ -1450,14 +1459,7 @@ static inline void *common_egress_handling(void *kaddr, struct page *page, u64 u
 			/* This check only makes sense if pages are zeroed out (?) */
 			if (unlikely(get_page_state(page))) {
 				md = virt2io_md(kaddr);
-
-				pr_err("%ps] Zero refcount page %llx(state %llx [%u]<%llx>[%u] )[%d] addr %llx"
-					"%ps] transit %d transitcnt %u [%d/%d]\n",
-					__builtin_return_address(0),
-					(u64)page, get_page_state(page), md->line,
-					md->prev_state, md->prev_line, page_ref_count(page), (u64)kaddr,
-					__builtin_return_address(0),
-					md->in_transit, md->in_transit_dbg, md->tx_cnt, md->tx_compl);
+				dump_page_state(page);
 				panic("Illegal page state\n");
 			}
 			init_page_count(page);
@@ -1538,7 +1540,7 @@ static inline void *common_egress_handling(void *kaddr, struct page *page, u64 u
 		}
 #endif
 		kaddr = (md->next_frag) ? uaddr2addr(md->next_frag) : NULL;
-		if (kaddr) {
+		if (unlikely(kaddr)) {
 			uaddr = md->next_frag;
 			page = virt_to_page(kaddr);
 		}
@@ -2363,7 +2365,7 @@ static int maio_map_show(struct seq_file *m, void *v)
         return 0;
 }
 
-#define MAIO_VERSION	"v1.2-alpha"
+#define MAIO_VERSION	"v1.5-new_md"
 static int maio_version_show(struct seq_file *m, void *v)
 {
 	seq_printf(m, "%s\n", MAIO_VERSION);

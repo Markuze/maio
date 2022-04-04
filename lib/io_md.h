@@ -105,6 +105,24 @@ struct err_stats {
 };
 
 struct io_md {
+	u32 		len;
+	u16 		vlan_tci;
+	u16 		flags;
+	volatile u32	tx_id;
+	u32 		poison;
+	u64 		next_frag;
+	u64		__unused1;
+
+	/* Debug */
+	u64 		state;
+	u64 		prev_state;
+	u32 		line;
+	u32 		prev_line;
+	atomic_t	idx;
+	u32 		nr_comp;
+}____cacheline_aligned_in_smp;
+/*
+struct old_io_md {
 	u64 state;
 
 	u32 len;
@@ -135,8 +153,9 @@ struct io_md {
 	atomic_t	idx;
 	u32 prev_line;
 } ____cacheline_aligned_in_smp;
+*/
 
-#define NR_SHADOW_LOG_ENTIRES	16
+#define NR_SHADOW_LOG_ENTIRES	16  //SP_SIZE/sizoef(log_entry)
 struct shadow_state {
 	union {
 		u8 __size[320];
