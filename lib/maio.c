@@ -1083,39 +1083,52 @@ EXPORT_SYMBOL(maio_post_rx_page);
 int maio_xmit(struct net_device *dev, struct sk_buff **skb, int cnt)
 {
 	int err = 0, i = 0, more = cnt;
+#if 1
         struct netdev_queue *txq = netdev_get_tx_queue(dev, smp_processor_id());
+#endif
 
 	if (unlikely(!skb)) {
 		err = -ENOMEM;
-                goto unlock;
+                goto out;
         }
+
         local_bh_disable();
+#if 1
         HARD_TX_LOCK(dev, txq, smp_processor_id());
 
         if (unlikely(netif_xmit_frozen_or_drv_stopped(txq))) {
+#else
+        if (unlikely(!netif_running(dev) || !netif_carrier_ok(dev))) {
+#endif
 		err = -EBUSY;
 		inc_err(MAIO_ERR_TX_BUSY);
 
 		goto unlock;
         }
-        //refcount_add(burst, &pkt_dev->skb->users);
 
 	for ( i = 0; i < cnt; i++) {
-
-		err = netdev_start_xmit(skb[i], dev, txq, --more);
-		if (!dev_xmit_complete(err)) {
-			const skb_frag_t *frag = &skb_shinfo(skb[i])->frags[0];
-			inc_err(MAIO_ERR_TX_ERR_NETDEV);
-			maio_trace_page_rc(frag->bv_page, (0xFF));
-			consume_skb(skb[i]);
+#if 0
+		dev_queue_xmit_accel(skb[i], dev);
+#else
+		if (likely(!netif_xmit_frozen_or_drv_stopped(txq))) {
+			err = netdev_start_xmit(skb[i], dev, txq, --more > 0);
+			if (!dev_xmit_complete(err)) {
+				const skb_frag_t *frag = &skb_shinfo(skb[i])->frags[0];
+				inc_err(MAIO_ERR_TX_ERR_NETDEV);
+				maio_trace_page_rc(frag->bv_page, (0xFF));
+				consume_skb(skb[i]);
+			}
 		}
+#endif
 	}
 	err = 0;
 
 unlock:
+#if 1
         HARD_TX_UNLOCK(dev, txq);
+#endif
         local_bh_enable();
-
+out:
 	return err;
 }
 
