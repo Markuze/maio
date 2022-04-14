@@ -24,15 +24,16 @@
 /*************************************************/
 
 static char* maio_stat_names[] = {
-	"User page	",
-	"RX Page  	",
-	"TX Page  	",
-	"NAPI Page	",
-	"Network Stack	",
-	"Free Page	",
-	"HEAD Page	",
-	"Refill Page	",
-	"Pushed Pages	",
+	"User page",
+	"RX Page",
+	"TX Page",
+	"NAPI Page",
+	"Network Stack",
+	"Free Page",
+	"HEAD Page",
+	"Refill Page",
+	"Pushed Page",
+	"Consumed Page",
 };
 
 typedef atomic64_t maio_cntr;
@@ -49,6 +50,7 @@ struct memory_stats {
 			maio_cntr	page_head;
 			maio_cntr	page_refill;
 			maio_cntr	nr_page_initial;
+			maio_cntr	page_consumed;
 		};
 		maio_cntr	array[0];
 	};
@@ -155,19 +157,23 @@ struct old_io_md {
 } ____cacheline_aligned_in_smp;
 */
 
-#define NR_SHADOW_LOG_ENTIRES	16  //SP_SIZE/sizoef(log_entry)
+struct shadow_entry {
+	u16 rc:4;
+	u16 state:4;
+	u16 core:7;
+	u16 owner:1; //User:1 , Kernel:0
+	u16 op_id;
+	u64 addr;
+	u64 addr2;
+}__attribute__ ((__packed__));
+
+#define SHADOW_LOG_SZ		640
+#define NR_SHADOW_LOG_ENTRIES	(SHADOW_LOG_SZ/sizeof(struct shadow_entry))
+
 struct shadow_state {
-	union {
-		u8 __size[320];
-		struct {
-			u8 core_rc;
-			u8 mark;
-			u16 unused;
-			u64 addr;
-			u64 addr2;
-		} __attribute__ ((__packed__)) entry[NR_SHADOW_LOG_ENTIRES];
-	};
-} ____cacheline_aligned_in_smp;
+	struct shadow_entry entry[NR_SHADOW_LOG_ENTRIES];
+};
+
 
 #define IO_MD_OFF      (PAGE_SIZE - SKB_DATA_ALIGN(sizeof(struct io_md)))
 #define SHADOW_OFF     (IO_MD_OFF - SKB_DATA_ALIGN(sizeof(struct shadow_state)))

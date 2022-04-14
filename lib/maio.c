@@ -160,7 +160,7 @@ static void dump_memory_stats(struct seq_file *m)
 
 	for (i = 0; i < NR_MAIO_STATS; i++)
 		if (m) {
-			seq_printf(m, "%s\t: %ld\n", maio_stat_names[i],
+			seq_printf(m, "%s\t\t: %ld\n", maio_stat_names[i],
 					atomic_long_read(&memory_stats.array[i]));
 		} else {
 			pr_err("%s\t: %ld\n", maio_stat_names[i],
@@ -300,9 +300,9 @@ static inline void dump_page_rc(struct page *page)
 	int i;
 //	int cntr = 0;
 
-	for (i = 0; i < NR_SHADOW_LOG_ENTIRES; ++i, ++idx) {
+	for (i = 0; i < NR_SHADOW_LOG_ENTRIES; ++i, ++idx) {
 		//int len;
-		idx = idx & (NR_SHADOW_LOG_ENTIRES - 1);
+		idx = idx & (NR_SHADOW_LOG_ENTRIES - 1);
 
 		if (!shadow->entry[idx].addr) {
 			pr_err("%-2d:----------\n",
@@ -310,11 +310,21 @@ static inline void dump_page_rc(struct page *page)
 			continue;
 		}
 
-		pr_err("%-2d:%-2d:%-2d [0x%x]:%ps:..%ps\n",
+		if (shadow->entry[idx].owner)
+			pr_err("%-2d:%-2d:%s:%s [0x%x]:%lld\n",
 				idx,
-				shadow->entry[idx].core_rc >> 3,
-				shadow->entry[idx].core_rc & 0x7,
-				shadow->entry[idx].mark,
+				shadow->entry[idx].core,
+				"U",
+				maio_stat_names[shadow->entry[idx].state],
+				shadow->entry[idx].op_id,
+				shadow->entry[idx].addr);
+		else
+			pr_err("%-2d:%-2d:%s:%s [0x%x]:%ps:..%ps\n",
+				idx,
+				shadow->entry[idx].core,
+				"K",
+				maio_stat_names[shadow->entry[idx].state],
+				shadow->entry[idx].op_id,
 				(void *)shadow->entry[idx].addr,
 				(void *)shadow->entry[idx].addr2);
 /*
@@ -542,16 +552,18 @@ static inline void __maio_free(struct page *page, void *addr)
 	__maio_free_elem(addr, get_maio_elem_order(page));
 }
 
-void maio_trace_page_rc(struct page *page, int mark)
+void maio_trace_page_rc(struct page *page, int op)
 {
 	struct shadow_state	*shadow = page2shadow(page);
 	struct io_md		*md = page2io_md(page);
 
 	u64 idx	= atomic_inc_return(&md->idx);
-	idx = (idx -1) & (NR_SHADOW_LOG_ENTIRES -1);
+	idx = (idx -1) & (NR_SHADOW_LOG_ENTRIES -1);
 
-	shadow->entry[idx].core_rc  	= (smp_processor_id()<<3)|page_ref_count(page);
-	shadow->entry[idx].mark		= mark;
+	shadow->entry[idx].rc		= page_ref_count(page);
+	shadow->entry[idx].state	= ffs(get_page_state(page)>>9);
+	shadow->entry[idx].core  	= smp_processor_id();
+	shadow->entry[idx].op_id	= op;
 	shadow->entry[idx].addr		=(u64)__builtin_return_address(1);
 	shadow->entry[idx].addr2	=(u64)__builtin_return_address(4);
 
