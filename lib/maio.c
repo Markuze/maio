@@ -241,7 +241,7 @@ static inline struct io_md* page2io_md(struct page *page)
 */
 }
 
-static inline void __set_page_state(struct io_md *md,u64 new_state, u32 line, u8 rc)
+static inline void __set_page_state(struct page *page, struct io_md *md,u64 new_state, u32 line, u32 op)
 {
 	dec_state(md->state);
 	inc_state(new_state);
@@ -250,8 +250,10 @@ static inline void __set_page_state(struct io_md *md,u64 new_state, u32 line, u8
 	md->prev_line  = md->line;
 	md->state = new_state;
 	md->line = line;
+
+	maio_trace_page_rc(page, op);
 }
-#define set_page_state(p,s)	__set_page_state(page2io_md(p),s, __LINE__, page_ref_count(p))
+#define set_page_state(p,s,o)	__set_page_state(p, page2io_md(p),s, __LINE__, o)
 
 static inline u64 get_page_state(struct page *page)
 {
@@ -527,13 +529,13 @@ static inline void __maio_free(struct page *page, void *addr)
 	if (unlikely(! (get_page_state(page) & MAIO_PAGE_IO))) {
 		inc_err(MAIO_ERR_BAD_FREE_PAGE);
 
-		dump_io_md(virt2io_md(addr), "MD");
-		dump_page_state(page);
-		panic("Illegal page state Non IO Page! \n");
-
-		set_page_state(page, MAIO_PAGE_USER);
-		init_page_count(page);
-		maio_trace_page_rc(page, (0xF1));
+//	dump_io_md(virt2io_md(addr), "MD");
+//	dump_page_state(page);
+//	panic("Illegal page state Non IO Page! \n");
+//
+//	set_page_state(page, MAIO_PAGE_USER);
+//		init_page_count(page);
+//		maio_trace_page_rc(page, (0xF1));
 		return;
 	}
 	if (unlikely(virt2io_md(addr)->state == MAIO_PAGE_TX)) {
@@ -545,8 +547,7 @@ static inline void __maio_free(struct page *page, void *addr)
 	//	(u64)page, get_page_state(page), page_ref_count(page),page_ref_count(page));
 	assert(get_page_state(page) & MAIO_PAGE_IO);
 
-	maio_trace_page_rc(page, MAIO_PAGE_RC_FREE);
-	set_page_state(page, MAIO_PAGE_FREE);
+	set_page_state(page, MAIO_PAGE_FREE, MAIO_PAGE_RC_FREE);
 
 	smp_wmb();
 	__maio_free_elem(addr, get_maio_elem_order(page));
@@ -666,8 +667,7 @@ struct page *__maio_alloc_pages(size_t order)
 			}
 		}
 		init_page_count(page);
-		set_page_state(page, MAIO_PAGE_RX);
-		maio_trace_page_rc(page, MAIO_PAGE_RC_ALLOC);
+		set_page_state(page, MAIO_PAGE_RX, MAIO_PAGE_RC_ALLOC);
 	}
 	//trace_debug("%d:%s: %pS\n", smp_processor_id(), __FUNCTION__, __builtin_return_address(0));
 	//trace_debug("%d:%s:%llx\n", smp_processor_id(), __FUNCTION__, (u64)page);
@@ -885,7 +885,7 @@ static inline void collect_rx_refill_page(u64 addr)
 
 	if (PageHead(page)) {
 		md->state = MAIO_PAGE_USER;
-		set_page_state(page, MAIO_PAGE_HEAD);
+		set_page_state(page, MAIO_PAGE_HEAD, MAIO_PAGE_RC_REFILL);
 		assert(!is_maio_page(page));
 		inc_err(MAIO_ERR_REFILL_HEAD);
 
@@ -901,7 +901,7 @@ static inline void collect_rx_refill_page(u64 addr)
 			dump_page_state(page);
 			panic("Illegal state\n");
 		}
-		maio_trace_page_rc(page, MAIO_PAGE_RC_REFILL);
+		//maio_trace_page_rc(page, MAIO_PAGE_RC_REFILL);
 		/* page refill is set by user */
 
 		if (likely(rc)) {
@@ -909,7 +909,7 @@ static inline void collect_rx_refill_page(u64 addr)
 				maio_page_free(page);
 		} else {
 			inc_err(MAIO_ERR_REFILL_NEW);
-			set_page_state(page, MAIO_PAGE_FREE);
+			set_page_state(page, MAIO_PAGE_FREE, MAIO_PAGE_RC_REFILL);
 
 			smp_wmb();
 			__maio_free_elem(kaddr, get_maio_elem_order(page));
@@ -964,7 +964,7 @@ static inline int __maio_post_rx_page(struct net_device *netdev, struct page *pa
 	if (unlikely(prep_rx_ring_entry(qp))) {
 		if (page) {
 			/* its a MAIO page and we consume it */
-			set_page_state(page, MAIO_PAGE_CONSUMED);
+			set_page_state(page, MAIO_PAGE_CONSUMED, 0xC0);
 			smp_wmb();
 			put_page(page);
 		}
@@ -1024,8 +1024,7 @@ static inline int __maio_post_rx_page(struct net_device *netdev, struct page *pa
 		assert(get_page_state(page) & (MAIO_PAGE_RX|MAIO_PAGE_HEAD));
 	}
 
-	set_page_state(page, MAIO_PAGE_USER);
-	maio_trace_page_rc(page, MAIO_PAGE_RC_RX);
+	set_page_state(page, MAIO_PAGE_USER, MAIO_PAGE_RC_RX);
 	assert(uaddr2addr(addr2uaddr(addr)) == addr);
 	md = virt2io_md(addr);
 	md->len 	= len;
@@ -1089,7 +1088,7 @@ int maio_post_rx_page(struct net_device *netdev, void *addr, u32 len, u16 vlan_t
 	if ( ! __maio_post_rx_page(netdev, page, addr, len, vlan_tci, flags)) {
 		if (page) {
 			inc_err(MAIO_ERR_NS);
-			set_page_state(page, MAIO_PAGE_NS);
+			set_page_state(page, MAIO_PAGE_NS, MAIO_PAGE_RC_RX);
 			smp_wmb();
 			put_page(page);
 		}
@@ -1313,8 +1312,6 @@ static void maio_zc_tx_callback(struct ubuf_info *ubuf, bool zc_success)
 	}
 	assert(get_page_state(page) & (MAIO_PAGE_TX|MAIO_PAGE_NAPI));
 
-	maio_trace_page_rc(page, MAIO_PAGE_RC_COMP);
-
 	if (likely(refcount_dec_and_test(&ubuf->refcnt))) {
 #if 0
 		struct io_md *tmp_md = md;
@@ -1335,13 +1332,14 @@ static void maio_zc_tx_callback(struct ubuf_info *ubuf, bool zc_success)
 			}
 		}
 #else
-		set_page_state(page, MAIO_PAGE_USER);
+		set_page_state(page, MAIO_PAGE_USER, MAIO_PAGE_RC_COMP);
 		md->tx_id = 0;
 		smp_wmb();
 #endif
 		inc_err(MAIO_ERR_TX_COMP);
 	//	assert(get_err(MAIO_ERR_TX_COMP) <= get_err(MAIO_ERR_TX_START) + get_err(MAIO_ERR_NAPI));
 	} else {
+		maio_trace_page_rc(page, MAIO_PAGE_RC_COMP);
 		inc_err(MAIO_ERR_TX_COMP_TRANS);
 	}
 
@@ -1587,15 +1585,14 @@ static inline int maio_skb_add_frags(struct sk_buff *skb, char *kaddr, u64 state
 		kaddr 	+= MAIO_TX_SKB_SIZE;
 		md->len -= MAIO_TX_SKB_SIZE;
 	 } else {
-		set_page_state(virt_to_page(kaddr), state);
+		set_page_state(virt_to_page(kaddr), state, MAIO_PAGE_RC_TX_FRAG);
 		kaddr = (md->next_frag) ? uaddr2addr(md->next_frag) : NULL;
 	}
 	while (kaddr) {
 		struct page *page = virt_to_page(kaddr);
 		size_t offset = ((u64)kaddr & (~PAGE_MASK));
 
-		maio_trace_page_rc(page, MAIO_PAGE_RC_TX_FRAG);
-		set_page_state(page, state);
+		set_page_state(page, state, MAIO_PAGE_RC_TX_FRAG);
 
 		/*TODO: Leaking skb */
 		if (unlikely(nr_frags >= MAX_SKB_FRAGS)) {
@@ -2123,14 +2120,14 @@ static inline ssize_t maio_add_pages_0(struct file *file, const char __user *buf
 		kbase = (void *)((u64)kbase  & PAGE_MASK);
 
 		if (PageHead(page)) {
-			set_page_state(page, MAIO_PAGE_HEAD);
+			set_page_state(page, MAIO_PAGE_HEAD, MAIO_PAGE_RC_PUSH);
 			maio_cache_head(page);
 			assert(!is_maio_page(page));
 		} else {
 			trace_debug("[%ld]Adding %llx [%llx]  - P %llx[%d] <%d - %zu>\n", len, (u64 )kbase, meta->bufs[len],
 					(u64)page, page_ref_count(page), (int)(page - compound_head(page)), len);
 			set_page_count(page, 0);
-			set_page_state(page, MAIO_PAGE_FREE);
+			set_page_state(page, MAIO_PAGE_FREE, MAIO_PAGE_RC_PUSH);
 			assert(get_maio_elem_order(__compound_head(page, 0)) == 0);
 			assert(is_maio_page(page));
 			__maio_free_elem(kbase, 0);

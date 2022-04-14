@@ -129,16 +129,20 @@ void maio_trace_page_rc(struct page *page, int i);
 void *maio_kalloc(void);
 struct page *maio_alloc_pages(size_t order);
 
-#define MAIO_PAGE_RC_ALLOC		(0xA)
+#define MAIO_PAGE_RC_ALLOC		(0x0A)
 #define MAIO_PAGE_RC_ALLOC_HEAD		(0xAE)
-#define MAIO_PAGE_RC_FREE		(0xF)
-#define MAIO_PAGE_RC_TX			(0x7)
+#define MAIO_PAGE_RC_FREE		(0x0F)
+#define MAIO_PAGE_RC_TX			(0x07)
+#define MAIO_PAGE_RC_TX_ZERO		(0x70)
+#define MAIO_PAGE_RC_TX_CPY		(0x7C)
 #define MAIO_PAGE_RC_TX_FRAG		(0x72)
-#define MAIO_PAGE_RC_RX			(0x2)
-#define MAIO_PAGE_RC_COMP		(0xC)
-#define MAIO_PAGE_RC_REFILL		(0xE)
-#define MAIO_PAGE_RC_DEC		(0xD)
-#define MAIO_PAGE_RC_INC		(0x1)
+#define MAIO_PAGE_RC_RX			(0x02)
+#define MAIO_PAGE_RC_COMP		(0x0C)
+#define MAIO_PAGE_RC_NO_COMP		(0x1C)
+#define MAIO_PAGE_RC_REFILL		(0x0E)
+#define MAIO_PAGE_RC_DEC		(0x0D)
+#define MAIO_PAGE_RC_INC		(0x01)
+#define MAIO_PAGE_RC_PUSH		(0x51)
 
 #define maio_trace_page_dec(p)	maio_trace_page_rc(p, MAIO_PAGE_RC_DEC)
 #define maio_trace_page_inc(p)	maio_trace_page_rc(p, MAIO_PAGE_RC_INC)
