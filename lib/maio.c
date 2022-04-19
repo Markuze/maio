@@ -56,6 +56,7 @@ static struct maio_magz global_maio;
 static struct memory_stats 	memory_stats;
 static struct err_stats 	err_stats;
 static u64 last_comp;
+static u64 dump_page_address;
 
 struct user_matrix *global_maio_matrix[MAX_DEV_NUM];
 EXPORT_SYMBOL(global_maio_matrix);
@@ -130,9 +131,9 @@ static void dump_err_stats(struct seq_file *m)
 
 
 	if (m) {
-		seq_printf(m, "%s\t: %llx\n", "Last Comp", last_comp);
+		seq_printf(m, "%s\t: 0x%llx\n", "Last Comp", last_comp);
 	} else {
-		pr_err("%s\t: %llx\n", "Last Comp", last_comp);
+		pr_err("%s\t: 0x%llx\n", "Last Comp", last_comp);
 	}
 
 }
@@ -568,7 +569,7 @@ void maio_trace_page_rc(struct page *page, int op)
 	shadow->entry[idx].addr		=(u64)__builtin_return_address(1);
 	shadow->entry[idx].addr2	=(u64)__builtin_return_address(4);
 
-	assert(md->state != MAIO_PAGE_FREE);
+	//assert(md->state != MAIO_PAGE_FREE);
 }
 EXPORT_SYMBOL(maio_trace_page_rc);
 
@@ -1655,7 +1656,7 @@ int maio_post_tx_page(void *state)
 			continue;
 		}
 
-		if (maio_skb_add_frags(skb, kaddr, MAIO_PAGE_NAPI)) {
+		if (maio_skb_add_frags(skb, kaddr, MAIO_PAGE_TX)) {
 			pr_err("%s) Failed to add frags\n", __FUNCTION__);
 			inc_err(MAIO_ERR_TX_FRAG_ERR);
 			advance_tx_ring(tx_thread);
@@ -1914,7 +1915,7 @@ static int maio_post_napi_page(struct maio_tx_thread *tx_thread/*, struct napi_s
 			continue;
 		}
 
-		if (maio_skb_add_frags(skb, kaddr, MAIO_PAGE_TX)) {
+		if (maio_skb_add_frags(skb, kaddr, MAIO_PAGE_NAPI)) {
 			pr_err("%s) Failed to add frags\n", __FUNCTION__);
 			inc_err(MAIO_ERR_TX_FRAG_ERR);
 			advance_tx_ring(tx_thread);
@@ -2344,6 +2345,40 @@ static ssize_t maio_enable_write(struct file *file,
         return maio_enable(file, buffer, count, pos);
 }
 
+static ssize_t maio_dump_page_write(struct file *file,
+                const char __user *buffer, size_t size, loff_t *pos)
+{
+	char	*kbuff, *cur;
+	void 	*kbase;
+	u64	base;
+
+	if (size <= 1 || size >= PAGE_SIZE)
+	        return -EINVAL;
+
+	kbuff = memdup_user_nul(buffer, size);
+	if (IS_ERR(kbuff))
+	        return PTR_ERR(kbuff);
+
+	/* will guess if hexa or decimal -- assumes hexa has 0x */
+	base 	= simple_strtoull(kbuff, &cur, 0);
+
+	if (virt_addr_valid(base)) {
+		kbase = (void *)base;
+		if (! is_maio_page(kbase))
+			kbase = NULL;
+	} else {
+		kbase = uaddr2addr(base);
+	}
+
+	if (! kbase)
+		return -EINVAL;
+
+	//dump_page_address = kbase;
+	dump_page_rc(virt_to_page(kbase));
+
+	return size;
+}
+
 static ssize_t maio_tx_write(struct file *file,
                 const char __user *buffer, size_t count, loff_t *pos)
 {
@@ -2451,6 +2486,14 @@ static const struct file_operations maio_enable_ops = {
         .write     = maio_enable_write,
 };
 
+static const struct file_operations maio_dump_page_ops = {
+        .open      = maio_map_open,
+        .read      = seq_read,
+        .llseek    = seq_lseek,
+        .release   = single_release,
+        .write     = maio_dump_page_write,
+};
+
 static const struct file_operations maio_tx_ops = {
         .open      = maio_map_open,
         .read      = seq_read,
@@ -2477,6 +2520,7 @@ static inline void proc_init(void)
 	proc_create_data("pages", 00666, maio_dir, &maio_page_ops, NULL);
 	proc_create_data("pages_0", 00666, maio_dir, &maio_page_0_ops, NULL);
 	proc_create_data("enable", 00666, maio_dir, &maio_enable_ops, NULL);
+	proc_create_data("dump_page", 00666, maio_dir, &maio_dump_page_ops, NULL);
 	proc_create_data("tx", 00666, maio_dir, &maio_tx_ops, NULL);
 	proc_create_data("napi", 00666, maio_dir, &maio_napi_ops, NULL);
 	proc_create_data("version", 00444, maio_dir, &maio_version_fops, NULL );
