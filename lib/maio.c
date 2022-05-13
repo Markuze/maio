@@ -46,7 +46,7 @@ maio_filter_func_p maio_filter;
 EXPORT_SYMBOL(maio_filter);
 //TODO: collect this shite in a struct
 
-/* get_user_pages */
+/* get_user_pages *///MOVE to Func
 static struct page* umem_pages[1<<HUGE_ORDER];
 static struct page* mtrx_pages[1<<HUGE_ORDER];
 

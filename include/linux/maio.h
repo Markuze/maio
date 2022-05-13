@@ -71,7 +71,7 @@ struct meta_pages_0 {
 
 struct user_matrix {
 	struct common_ring_info info;
-	u64 entries[0] ____cacheline_aligned_in_smp;
+	struct common_pmd_stats stats;
 };
 
 /******************************************************************************/

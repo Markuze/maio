@@ -183,7 +183,7 @@ struct page_priv_ctx {
 
 struct maio_page_map {
 	struct page *page;
-	struct  page_priv_ctx *priv;
+	struct page_priv_ctx *priv;
 };
 
 struct umem_region_mtt {
